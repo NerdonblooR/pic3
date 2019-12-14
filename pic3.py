@@ -1,9 +1,10 @@
 from z3 import *
 import heapq
+import threading
 
 
 # Simplistic (and fragile) converter from
-# a class of Horn clauses corresponding to 
+# a class of Horn clauses corresponding to
 # a transition system into a transition system
 # representation as <init, trans, goal>
 # It assumes it is given three Horn clauses
@@ -12,7 +13,7 @@ import heapq
 #  Invariant(x) and trans(x,x') => Invariant(x')
 #  Invariant(x) and goal(x) => Goal(x)
 # where Invariant and Goal are uninterpreted predicates
-    
+
 class Horn2Transitions:
     def __init__(self):
         self.trans = True
@@ -20,7 +21,7 @@ class Horn2Transitions:
         self.inputs = []
         self.goal = True
         self.index = 0
-        
+
     def parse(self, file):
         fp = Fixedpoint()
         goals = fp.parse_file(file)
@@ -41,7 +42,7 @@ class Horn2Transitions:
 
     def is_pred(self, p, name):
         return is_app(p) and p.decl().name() == name
-    
+
     def is_goal(self, body, head):
         if not self.is_pred(head, "Goal"):
             return False
@@ -77,7 +78,7 @@ class Horn2Transitions:
         inv1 = self.is_inv(head)
         if inv1 is None:
             return False
-        pred = self.subst_vars("x",  inv0, pred)
+        pred = self.subst_vars("x", inv0, pred)
         self.xs = self.vars
         pred = self.subst_vars("xn", inv1, pred)
         self.xns = self.vars
@@ -90,16 +91,16 @@ class Horn2Transitions:
     def is_init(self, body, head):
         for f in body.children():
             if self.is_inv(f) is not None:
-               return False
+                return False
         inv = self.is_inv(head)
         if inv is None:
             return False
         self.init = self.subst_vars("x", inv, body)
         return True
-    
+
     def subst_vars(self, prefix, inv, fml):
         subst = self.mk_subst(prefix, inv)
-        self.vars = [ v for (k,v) in subst ]
+        self.vars = [v for (k, v) in subst]
         return substitute(fml, subst)
 
     def mk_subst(self, prefix, inv):
@@ -122,10 +123,11 @@ class Horn2Transitions:
                 rs = self.get_vars(f_, rs)
             return z3util.vset(rs, str)
 
+
 # Produce a finite domain solver.
 # The theory QF_FD covers bit-vector formulas
 # and pseudo-Boolean constraints.
-# By default cardinality and pseudo-Boolean 
+# By default cardinality and pseudo-Boolean
 # constraints are converted to clauses. To override
 # this default for cardinality constraints
 # we set sat.cardinality.solver to True
@@ -143,8 +145,10 @@ def negate(f):
     else:
         return Not(f)
 
+
 def cube2clause(cube):
     return Or([negate(f) for f in cube])
+
 
 class State:
     def __init__(self, s):
@@ -153,17 +157,20 @@ class State:
 
     def add(self, clause):
         if clause not in self.R:
-           self.R |= { clause }
-           self.solver.add(clause)
-    
+            self.R |= {clause}
+            self.solver.add(clause)
+
+
 class Goal:
     def __init__(self, cube, parent, level):
         self.level = level
         self.cube = cube
         self.parent = parent
 
+
 def is_seq(f):
     return isinstance(f, list) or isinstance(f, tuple) or isinstance(f, AstVector)
+
 
 # Check if the initial state is bad
 def check_disjoint(a, b):
@@ -181,12 +188,13 @@ def prune(R):
         s.push()
         for f2 in R:
             if f2 not in removed:
-               s.add(Not(f2) if f1.eq(f2) else f2)
+                s.add(Not(f2) if f1.eq(f2) else f2)
         if s.check() == unsat:
-            removed |= { f1 }
+            removed |= {f1}
         s.pop()
     return R - removed
-                
+
+
 class MiniIC3:
     def __init__(self, init, trans, goal, x0, inputs, xn):
         self.x0 = x0
@@ -205,26 +213,28 @@ class MiniIC3:
         self.s_bad = fd_solver()
         self.s_good = fd_solver()
         self.s_bad.add(self.bad)
-        self.s_good.add(Not(self.bad))        
-        
+        self.s_good.add(Not(self.bad))
+
     def next(self, f):
         if is_seq(f):
-           return [self.next(f1) for f1 in f]
-        return substitute(f, zip(self.x0, self.xn))    
-    
+            return [self.next(f1) for f1 in f]
+        return substitute(f, zip(self.x0, self.xn))
+
     def prev(self, f):
         if is_seq(f):
-           return [self.prev(f1) for f1 in f]
-        return substitute(f, zip(self.xn, self.x0))    
+            return [self.prev(f1) for f1 in f]
+        return substitute(f, zip(self.xn, self.x0))
 
-    # add a new frame to states, each state solver contains a new solver that
+        # add a new frame to states, each state solver contains a new solver that
+
     # embed a transition
     def add_solver(self):
         s = fd_solver()
         s.add(self.trans)
-        self.states += [State(s)]        
+        self.states += [State(s)]
 
-    # retrive the lemmas of f_i
+        # retrive the lemmas of f_i
+
     def R(self, i):
         return And(self.states[i].R)
 
@@ -232,8 +242,8 @@ class MiniIC3:
     def is_valid(self):
         i = 1
         while i + 1 < len(self.states):
-            if not (self.states[i].R - self.states[i+1].R):
-               return And(prune(self.states[i].R))
+            if not (self.states[i].R - self.states[i + 1].R):
+                return And(prune(self.states[i].R))
             i += 1
         return None
 
@@ -258,26 +268,26 @@ class MiniIC3:
     def projectN(self, m):
         return self.values2literals(m, self.xn)
 
-    # Determine if there is a cube for the current state 
+    # Determine if there is a cube for the current state
     # that is potentially reachable.
     def unfold(self):
         core = []
-        #add a checkpoint
+        # add a checkpoint
         self.s_bad.push()
-        R = self.R(len(self.states)-1)
+        R = self.R(len(self.states) - 1)
         self.s_bad.add(R)
         is_sat = self.s_bad.check()
         if is_sat == sat:
-           m = self.s_bad.model()
-           cube = self.project0(m)
-           props = cube + self.projectI(m)
-           self.s_good.push()
-           self.s_good.add(R)
-           is_sat2 = self.s_good.check(props)
-           assert is_sat2 == unsat
-           core = self.s_good.unsat_core()
-           core = [c for c in core if c in set(cube)]
-           self.s_good.pop()
+            m = self.s_bad.model()
+            cube = self.project0(m)
+            props = cube + self.projectI(m)
+            self.s_good.push()
+            self.s_good.add(R)
+            is_sat2 = self.s_good.check(props)
+            assert is_sat2 == unsat
+            core = self.s_good.unsat_core()
+            core = [c for c in core if c in set(cube)]
+            self.s_good.pop()
         self.s_bad.pop()
         return is_sat, core
 
@@ -291,7 +301,7 @@ class MiniIC3:
             self.states[j].add(clause)
 
     # minimize cube that is core of Dual solver.
-    # this assumes that props & cube => Trans    
+    # this assumes that props & cube => Trans
     def minimize_cube(self, cube, inputs, lits):
         is_sat = self.min_cube_solver.check(lits + [c for c in cube] + [i for i in inputs])
         assert is_sat == unsat
@@ -313,18 +323,18 @@ class MiniIC3:
             sys.stdout.flush()
             # Not(g.cube) is f-1 invariant
             if f == 0:
-               print("")
-               return g
+                print("")
+                return g
             cube, f, is_sat = self.is_inductive(f, g.cube)
             if is_sat == unsat:
-               self.block_cube(f, self.prev(cube))
-               if f < f0:
-                  self.push_heap(Goal(g.cube, g.parent, f + 1))
+                self.block_cube(f, self.prev(cube))
+                if f < f0:
+                    self.push_heap(Goal(g.cube, g.parent, f + 1))
             elif is_sat == sat:
-               self.push_heap(Goal(cube, g, f - 1))
-               self.push_heap(g)
+                self.push_heap(Goal(cube, g, f - 1))
+                self.push_heap(g)
             else:
-               return is_sat
+                return is_sat
         print("")
         return None
 
@@ -347,17 +357,17 @@ class MiniIC3:
         s.add(self.prev(Not(And(cube))))
         is_sat = s.check(cube)
         if is_sat == sat:
-           m = s.model()
+            m = s.model()
         s.pop()
         if is_sat == sat:
-           cube = self.next(self.minimize_cube(self.project0(m), self.projectI(m), self.projectN(m)))
+            cube = self.next(self.minimize_cube(self.project0(m), self.projectI(m), self.projectN(m)))
         elif is_sat == unsat:
-           cube, f = self.generalize(cube, f)
+            cube, f = self.generalize(cube, f)
         return cube, f, is_sat
-                        
+
     def run(self):
         if not check_disjoint(self.init, self.bad):
-           return "goal is reached in initial state"
+            return "goal is reached in initial state"
         level = 0
         while True:
             inv = self.is_valid()
@@ -365,37 +375,71 @@ class MiniIC3:
                 return inv
             is_sat, cube = self.unfold()
             if is_sat == unsat:
-               level += 1
-               print("Unfold %d" % level)
-               sys.stdout.flush()
-               self.add_solver()
+                level += 1
+                print("Unfold %d" % level)
+                sys.stdout.flush()
+                self.add_solver()
             elif is_sat == sat:
-               cex = self.ic3_blocked(cube, level)
-               if cex is not None:
-                  return cex
+                cex = self.ic3_blocked(cube, level)
+                if cex is not None:
+                    return cex
             else:
-               return is_sat  
+                return is_sat
+
+
+    def partition_bad_state(self, h2t):
+        partitioner = fd_solver()
+        good_solver = fd_solver()
+
+        partitioner.add(h2t.goal)
+        good_solver.add(Not(h2t.goal))
+        bsize = 1
+        batches = []
+        batch = []
+        # partition the bad state
+        while sat == partitioner.check():
+            m = partitioner.model()
+            cube = self.project0(m) + self.projectI(m)
+            # good_solver.check(cube)
+            # assert (good_solver.check(cube) == unsat)
+            # core = good_solver.unsat_core()
+            partitioner.add(Not(And(cube)))
+            batch.append(And(cube))
+            if len(batch) == bsize:
+                batches.append(batch)
+                batch = []
+
+            instances = []
+            for batch in batches:
+                subgoal = batch[0]
+                if len(batch) > 1:
+                    subgoal = Or(batch)
+                instances.append(MiniIC3(h2t.init, h2t.trans, subgoal, h2t.xs, h2t.inputs, h2t.xns))
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def test(file):
     h2t = Horn2Transitions()
     h2t.parse(file)
     mp = MiniIC3(h2t.init, h2t.trans, h2t.goal, h2t.xs, h2t.inputs, h2t.xns)
-    result = mp.run()    
-    if isinstance(result, Goal):
-       g = result
-       print("Trace")
-       while g:
-          print(g.level, g.cube)
-          g = g.parent
-       return
-    if isinstance(result, ExprRef):
-       print("Invariant:\n%s " % result)
-       return
-    print(result)
+    mp.partition_bad_state(h2t.goal)
 
-#test("data/horn1.smt2")
-# test("data/horn2.smt2")
-# test("data/horn3.smt2")
-# test("data/horn4.smt2")
-test("data/horn5.smt2")
-# test("data/horn6.smt2") # takes long time to finish
+
+if __name__ == '__main__':
+    # test("data/horn1.smt2")
+    # test("data/horn2.smt2")
+    # test("data/horn3.smt2")
+    test("data/horn4.smt2")
+    #test("data/horn5.smt2")
+    #test("data/horn6.smt2") # takes long time to finish
