@@ -416,6 +416,15 @@ def test(file):
 
 
 def handler(event, context):
+    event = {
+      "init": "Not(Or(x1))",
+      "trans": "And(And(Not(x1), Not(i1)) == i2, And(x1, i1) == i3, And(Not(i3), Not(i2)) == xn1)",
+      "goal": "And(x1)",
+      "inputs": "i1 i2 i3",
+      "xs": "x1",
+      "xns": "xn1"
+    }
+
     init_str = event['init']
     trans_str = event['trans']
     goal_str = event['goal']
@@ -456,3 +465,5 @@ def handler(event, context):
         return
 
     return {'message': result}
+
+handler({},{})
