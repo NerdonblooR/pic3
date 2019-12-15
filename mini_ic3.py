@@ -1,5 +1,6 @@
 from z3 import *
 import heapq
+import re
 
 
 # Simplistic (and fragile) converter from
@@ -380,22 +381,93 @@ def test(file):
     h2t = Horn2Transitions()
     h2t.parse(file)
     mp = MiniIC3(h2t.init, h2t.trans, h2t.goal, h2t.xs, h2t.inputs, h2t.xns)
-    result = mp.run()    
+    result = mp.run()
     if isinstance(result, Goal):
-       g = result
-       print("Trace")
-       while g:
-          print(g.level, g.cube)
-          g = g.parent
-       return
+        g = result
+        print("Trace")
+        while g:
+            print(g.level, g.cube)
+            g = g.parent
+        return
     if isinstance(result, ExprRef):
-       print("Invariant:\n%s " % result)
-       return
+        print("Invariant:\n%s " % result)
+        return
     print(result)
+
+
+    # result = mp.run()
+    # if isinstance(result, Goal):
+    #    g = result
+    #    print("Trace")
+    #    while g:
+    #       print(g.level, g.cube)
+    #       g = g.parent
+    #    return
+    # if isinstance(result, ExprRef):
+    #    print("Invariant:\n%s " % result)
+    #    return
+    # print(result)
 
 #test("data/horn1.smt2")
 # test("data/horn2.smt2")
 # test("data/horn3.smt2")
 # test("data/horn4.smt2")
-test("data/horn5.smt2")
+#test("data/horn5.smt2")
 # test("data/horn6.smt2") # takes long time to finish
+
+#test("data/horn3.smt2")
+
+h2t = Horn2Transitions()
+h2t.parse("data/horn2.smt2")
+print h2t.init
+print h2t.trans
+print h2t.goal
+print h2t.inputs
+print h2t.xs
+print h2t.xns
+
+input_list = map(lambda x: str(x), h2t.inputs)
+xs_list = map(lambda x: str(x), h2t.xs)
+xns_list = map(lambda x: str(x), h2t.xns)
+
+init_str = str(h2t.init)
+trans_str = str(h2t.trans)
+goal_str = str(h2t.goal)
+inputs_str = " ".join(input_list)
+xs_str = " ".join(xs_list)
+xns_str = " ".join(xns_list)
+
+variables = "{0} {1} {2}".format(xs_str, inputs_str, xns_str)
+v_list = variables.split()
+var_str = "{0} = Bools('{1}')".format(",".join(v_list), " ".join(v_list))
+print var_str
+
+exec var_str
+
+xs = Bools(xs_str)
+inputs = Bools(inputs_str)
+xns = Bools(xns_str)
+
+init = eval(init_str)
+goal = eval(goal_str)
+
+print trans_str
+trans_str = trans_str.replace("\n", "")
+trans_str = re.sub(r'(.*)AtMost\(\((.*)\), ([0-9])\)', r'\1AtMost(\2, \3)', trans_str)
+trans = eval(trans_str)
+
+
+print "======================================"
+
+mp = MiniIC3(init, trans, goal, xs, inputs, xns)
+result = mp.run()
+if isinstance(result, Goal):
+    g = result
+    print("Trace")
+    while g:
+        print(g.level, g.cube)
+        g = g.parent
+if isinstance(result, ExprRef):
+    print("Invariant:\n%s " % result)
+
+print(result)
