@@ -418,7 +418,7 @@ def test(file):
 #test("data/horn3.smt2")
 
 h2t = Horn2Transitions()
-h2t.parse("data/horn2.smt2")
+h2t.parse("data/horn3.smt2")
 print h2t.init
 print h2t.trans
 print h2t.goal
