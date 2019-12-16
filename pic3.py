@@ -209,6 +209,7 @@ def values2literals(m, xs):
 def project_var(m, vars):
     return values2literals(m, vars)
 
+
 def partition_bad_state(h2t, partition_num):
     partitioner = fd_solver()
     good_solver = fd_solver()
@@ -218,14 +219,14 @@ def partition_bad_state(h2t, partition_num):
     # partition the bad state
     while sat == partitioner.check():
         m = partitioner.model()
-        cube = project_var(m, h2t.x0) + project_var(m, h2t.inputs)
+        cube = project_var(m, h2t.xs) + project_var(m, h2t.inputs)
         # good_solver.check(cube)
         # assert (good_solver.check(cube) == unsat)
         # core = good_solver.unsat_core()
         partitioner.add(Not(And(cube)))
         bad_states.append(And(cube))
 
-    batch_size = int(math.ceil(float(len(bad_states))/float(partition_num)))
+    batch_size = int(math.ceil(float(len(bad_states)) / float(partition_num)))
     subgoals = []
     batch = []
     count = 0
@@ -233,16 +234,16 @@ def partition_bad_state(h2t, partition_num):
         count += 1
         batch.append(bad)
         if count == batch_size and count > 1:
-            subgoals.append(str(Or(batch)))
+            subgoals.append(" ".join(str(Or(batch)).split()))
             count = 0
-            batch = 0
+            batch = []
     if len(batch) > 0:
         if len(batch) > 1:
-            subgoals.append(str(Or(batch)))
+            subgoals.append(" ".join(str(Or(batch)).split()))
         else:
-            subgoals.append(str(batch[0]))
-
+            subgoals.append(" ".join(str(batch[0]).split()))
     return subgoals
+
 
 #test lambda expression
 def invoke_lambda_function(h2t, goal):
@@ -259,17 +260,19 @@ def invoke_lambda_function(h2t, goal):
     client = boto3.client('lambda')
     response = client.invoke(
         FunctionName='pic3lambda',
-        InvocationType='Event',
+        InvocationType='RequestResponse',
         LogType='Tail',
         Payload=json.dumps(event)
     )
-    return response["message"]
+    resp = response['Payload'].read()
+    return resp
 
 
 def test(file):
     h2t = Horn2Transitions()
     h2t.parse(file)
-    subgoals = partition_bad_state(h2t)
+    worker_num = 5
+    subgoals = partition_bad_state(h2t, worker_num)
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(subgoals)) as executor:
         term = True
         ret = 'SAT'
