@@ -4,6 +4,8 @@ import threading
 import boto3
 import json
 import concurrent.futures
+import math
+
 
 # Simplistic (and fragile) converter from
 # a class of Horn clauses corresponding to
@@ -207,15 +209,12 @@ def values2literals(m, xs):
 def project_var(m, vars):
     return values2literals(m, vars)
 
-def partition_bad_state(h2t):
+def partition_bad_state(h2t, partition_num):
     partitioner = fd_solver()
     good_solver = fd_solver()
     partitioner.add(h2t.goal)
     good_solver.add(Not(h2t.goal))
-    bsize = 1
-    batches = []
-    batch = []
-    max_worker_num = 10
+    bad_states = []
     # partition the bad state
     while sat == partitioner.check():
         m = partitioner.model()
@@ -224,17 +223,26 @@ def partition_bad_state(h2t):
         # assert (good_solver.check(cube) == unsat)
         # core = good_solver.unsat_core()
         partitioner.add(Not(And(cube)))
-        batch.append(And(cube))
-        if len(batch) == bsize:
-            batches.append(batch)
-            batch = []
-        instances = []
-        for batch in batches:
-            subgoal = batch[0]
-            if len(batch) > 1:
-                subgoal = Or(batch)
+        bad_states.append(And(cube))
 
-        #divdes into batches, transform each goal into z3 expr
+    batch_size = int(math.ceil(float(len(bad_states))/float(partition_num)))
+    subgoals = []
+    batch = []
+    count = 0
+    for bad in bad_states:
+        count += 1
+        batch.append(bad)
+        if count == batch_size and count > 1:
+            subgoals.append(str(Or(batch)))
+            count = 0
+            batch = 0
+    if len(batch) > 0:
+        if len(batch) > 1:
+            subgoals.append(str(Or(batch)))
+        else:
+            subgoals.append(str(batch[0]))
+
+    return subgoals
 
 #test lambda expression
 def invoke_lambda_function(h2t, goal):
@@ -290,8 +298,6 @@ def test(file):
                         #add future to future lambda
                         break
         return ret
-
-
 
 if __name__ == '__main__':
     # test("data/horn1.smt2")
