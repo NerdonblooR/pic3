@@ -416,15 +416,14 @@ def test(file):
 
 
 def handler(event, context):
-    event = {
-      "init": "Not(Or(x1))",
-      "trans": "And(And(Not(x1), Not(i1)) == i2, And(x1, i1) == i3, And(Not(i3), Not(i2)) == xn1)",
-      "goal": "And(x1)",
-      "inputs": "i1 i2 i3",
-      "xs": "x1",
-      "xns": "xn1"
-    }
-
+    # event = {
+    #   "init": "Not(Or(x1))",
+    #   "trans": "And(And(Not(x1), Not(i1)) == i2, And(x1, i1) == i3, And(Not(i3), Not(i2)) == xn1)",
+    #   "goal": "And(x1)",
+    #   "inputs": "i1 i2 i3",
+    #   "xs": "x1",
+    #   "xns": "xn1"
+    # }
     init_str = event['init']
     trans_str = event['trans']
     goal_str = event['goal']
@@ -432,16 +431,22 @@ def handler(event, context):
     xs_str = event['xs']
     xns_str = event['xns']
 
+    print inputs_str
+    print xs_str
+    print xns_str
+
     variables = "{0} {1} {2}".format(xs_str, inputs_str, xns_str)
+    print variables
     v_list = variables.split()
+    print v_list
     var_str = "{0} = Bools('{1}')".format(",".join(v_list), " ".join(v_list))
     print var_str
 
     exec var_str
 
-    xs = Bools(xs_str)
-    inputs = Bools(inputs_str)
-    xns = Bools(xns_str)
+    xs = Bools(str(xs_str))
+    inputs = Bools(str(inputs_str))
+    xns = Bools(str(xns_str))
 
     init = eval(init_str)
     goal = eval(goal_str)
@@ -451,6 +456,13 @@ def handler(event, context):
     trans_str = re.sub(r'(.*)AtMost\(\((.*)\), ([0-9])\)', r'\1AtMost(\2, \3)', trans_str)
     trans = eval(trans_str)
 
+    print init
+    print trans
+    print goal
+    print xs
+    print inputs
+    print xns
+
     mp = MiniIC3(init, trans, goal, xs, inputs, xns)
     result = mp.run()
     if isinstance(result, Goal):
@@ -459,11 +471,10 @@ def handler(event, context):
         while g:
             print(g.level, g.cube)
             g = g.parent
-        return
+        return {'message': 'cex'}
     if isinstance(result, ExprRef):
         print("Invariant:\n%s " % result)
-        return
+        return {'message': str(result)}
 
     return {'message': result}
 
-handler({},{})
