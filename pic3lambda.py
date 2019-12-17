@@ -270,24 +270,13 @@ class MiniIC3:
 # test("data/horn6.smt2") # takes long time to finish
 
 def handler(event, context):
-    # event = {
-    #   "init": "Not(Or(x1))",
-    #   "trans": "And(And(Not(x1), Not(i1)) == i2, And(x1, i1) == i3, And(Not(i3), Not(i2)) == xn1)",
-    #   "goal": "And(x1)",
-    #   "inputs": "i1 i2 i3",
-    #   "xs": "x1",
-    #   "xns": "xn1"
-    # }
-    init_str = event['init']
-    trans_str = event['trans']
-    goal_str = event['goal']
-    inputs_str = event['inputs']
-    xs_str = event['xs']
-    xns_str = event['xns']
+    init_str = str(event['init'])
+    trans_str = str(event['trans'])
+    goal_str = str(event['goal'])
+    inputs_str = str(event['inputs'])
+    xs_str = str(event['xs'])
+    xns_str = str(event['xns'])
 
-    print inputs_str
-    print xs_str
-    print xns_str
 
     variables = "{0} {1} {2}".format(xs_str, inputs_str, xns_str)
     print variables

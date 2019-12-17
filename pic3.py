@@ -245,67 +245,82 @@ def partition_bad_state(h2t, partition_num):
     return subgoals
 
 
-#test lambda expression
-def invoke_lambda_function(h2t, goal):
-    input_list = map(lambda x: str(x), h2t.inputs)
-    xs_list = map(lambda x: str(x), h2t.xs)
-    xns_list = map(lambda x: str(x), h2t.xns)
+# test lambda expression
+def invoke_lambda_function(model, vars, goal):
+    session = boto3.session.Session()
+    client = session.client('lambda')
+
     event = {}
-    event['init'] = str(h2t.init)
-    event['trans'] = str(h2t.goal)
+    event['init'] = str(model[0])
+    event['trans'] = str(model[1])
     event['goal'] = str(goal)
-    event['inputs'] = " ".join(input_list)
-    event['xs'] = " ".join(xs_list)
-    event['xns'] = " ".join(xns_list)
-    client = boto3.client('lambda')
+    event['inputs'] = " ".join(vars[0])
+    event['xs'] = " ".join(vars[1])
+    event['xns'] = " ".join(vars[2])
+
     response = client.invoke(
         FunctionName='pic3lambda',
         InvocationType='RequestResponse',
         LogType='Tail',
         Payload=json.dumps(event)
     )
-    resp = response['Payload'].read()
-    return resp
+    resp = json.loads(response['Payload'].read())
+    print resp
+    return resp['message']
 
 
 def test(file):
     h2t = Horn2Transitions()
     h2t.parse(file)
-    worker_num = 5
+    input_list = map(lambda x: str(x), h2t.inputs)
+    xs_list = map(lambda x: str(x), h2t.xs)
+    xns_list = map(lambda x: str(x), h2t.xns)
+    vars = [input_list, xs_list, xns_list]
+
+    initstr = str(h2t.init)
+    transtr = str(h2t.trans)
+    model = [initstr, transtr]
+
+    worker_num = 10
     subgoals = partition_bad_state(h2t, worker_num)
+    print subgoals
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(subgoals)) as executor:
         term = True
         ret = 'SAT'
         inv_reached = 0
-        future_lambda = {executor.submit(invoke_lambda_function, h2t, subgoal): subgoal for subgoal in subgoals}
+        future_lambda = {executor.submit(invoke_lambda_function, model[:], vars[:], subgoal): subgoal for subgoal in subgoals}
         while term:
-            completed_future = concurrent.futures.as_completed(future_lambda, timeout=1)
+            completed_future = concurrent.futures.as_completed(future_lambda, timeout=None)
             for future in completed_future:
+                # subgoal = future_lambda[future]
                 del future_lambda[future]
-                subgoal = future_lambda[future]
                 try:
                     response = future.result()
+                    print response
                 except Exception as exc:
-                    print('%r generated an exception: %s' % (subgoal, exc))
+                    print('%r generated an exception: %s' % ("future", exc))
                 else:
-                    if response == 'Inv':
-                        inv_reached += 1
-                        if len(subgoal) == inv_reached:
-                            ret = 'UNSAT'
-                            break
-                    elif response == 'cex':
-                        term = False
-                        break
-                    else:
+                    if response == 'nondet':
                         #bound reached resubmit another job
                         #add future to future lambda
                         break
+                    elif response == 'cex':
+                        term = False
+                        break
+                    else:#reach an inv
+                        inv_reached += 1
+                        if len(subgoals) == inv_reached:
+                            term = False
+                            ret = 'UNSAT'
+                            break
+
+
         return ret
 
 if __name__ == '__main__':
+    print test("data/horn4.smt2")
     # test("data/horn1.smt2")
     # test("data/horn2.smt2")
     # test("data/horn3.smt2")
-    test("data/horn4.smt2")
     #test("data/horn5.smt2")
     #test("data/horn6.smt2") # takes long time to finish

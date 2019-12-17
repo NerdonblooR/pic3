@@ -3,7 +3,7 @@ import heapq
 import re
 import json
 import boto3
-
+import pickle
 
 # Simplistic (and fragile) converter from
 # a class of Horn clauses corresponding to 
@@ -227,8 +227,7 @@ class MiniIC3:
             return [self.prev(f1) for f1 in f]
         return substitute(f, zip(self.xn, self.x0))
 
-        # add a new frame to states, each state solver contains a new solver that
-
+    # add a new frame to states, each state solver contains a new solver that
     # embed a transition
     def add_solver(self):
         s = fd_solver()
@@ -487,7 +486,7 @@ def invoke_lambda_function(h2t, goal):
     xns_list = map(lambda x: str(x), h2t.xns)
     event = {}
     event['init'] = str(h2t.init)
-    event['trans'] = str(h2t.goal)
+    event['trans'] = str(h2t.trans)
     event['goal'] = str(goal)
     event['inputs'] = " ".join(input_list)
     event['xs'] = " ".join(xs_list)
@@ -499,8 +498,8 @@ def invoke_lambda_function(h2t, goal):
         LogType='Tail',
         Payload=json.dumps(event)
     )
-    resp = response['Payload'].read()
-    return resp
+    resp = json.loads(response['Payload'].read())
+    return resp['message']
 
 
 h2t = Horn2Transitions()
@@ -543,8 +542,14 @@ trans_str = re.sub(r'(.*)AtMost\(\((.*)\), ([0-9])\)', r'\1AtMost(\2, \3)', tran
 trans = eval(trans_str)
 
 print "======================================"
-
+# init_str = 'Not(Or(xn1, xn2, xn3, xn4, xn5, xn6, xn7, xn8, xn9, xn10))'
+# goal_str = 'And(Not(xn1), Not(xn2), Not(xn3), Not(xn4), xn5)'
+# init = eval(init_str)
+# goal = eval(goal_str)
+# mp = MiniIC3(goal, trans, init, xns, inputs, xs)
+#
 # mp = MiniIC3(init, trans, goal, xs, inputs, xns)
+#
 # result = mp.run()
 # if isinstance(result, Goal):
 #     g = result
@@ -554,8 +559,36 @@ print "======================================"
 #         g = g.parent
 # if isinstance(result, ExprRef):
 #     print("Invariant:\n%s " % result)
-# response = invoke_lambda_function(h2t, goal)
 
-ps =  partition_bad_state(h2t, 8)
+# response = invoke_lambda_function(h2t, str(goal))
+# print response
+ps = partition_bad_state(h2t, 10)
 for subgoal in ps:
     print subgoal
+    response = invoke_lambda_function(h2t, subgoal)
+    print response
+    # goal = eval(subgoal)
+    # mp = MiniIC3(init, trans, goal, xs, inputs, xns)
+    # result = mp.run()
+    # if isinstance(result, Goal):
+    #     g = result
+    #     print("Trace")
+    #     while g:
+    #         print(g.level, g.cube)
+    #         g = g.parent
+    # if isinstance(result, ExprRef):
+    #     print("Invariant:\n%s " % result)
+
+
+# print "========================="
+# print h2t.init
+# print "========================="
+# print h2t.trans
+# print "========================="
+# print h2t.goal
+# print "========================="
+# print h2t.inputs
+# print "========================="
+# print h2t.xs
+# print "========================="
+# print h2t.xns
