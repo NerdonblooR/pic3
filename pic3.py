@@ -1,6 +1,10 @@
 from z3 import *
 import heapq
 import threading
+import boto3
+import json
+import concurrent.futures
+import math
 
 
 # Simplistic (and fragile) converter from
@@ -160,17 +164,14 @@ class State:
             self.R |= {clause}
             self.solver.add(clause)
 
-
 class Goal:
     def __init__(self, cube, parent, level):
         self.level = level
         self.cube = cube
         self.parent = parent
 
-
 def is_seq(f):
     return isinstance(f, list) or isinstance(f, tuple) or isinstance(f, AstVector)
-
 
 # Check if the initial state is bad
 def check_disjoint(a, b):
@@ -178,7 +179,6 @@ def check_disjoint(a, b):
     s.add(a)
     s.add(b)
     return unsat == s.check()
-
 
 # Remove clauses that are subsumed
 def prune(R):
@@ -194,252 +194,133 @@ def prune(R):
         s.pop()
     return R - removed
 
+def value2literal(m, x):
+    value = m.eval(x)
+    if is_true(value):
+        return x
+    if is_false(value):
+        return Not(x)
+    return None
 
-class MiniIC3:
-    def __init__(self, init, trans, goal, x0, inputs, xn):
-        self.x0 = x0
-        self.inputs = inputs
-        self.xn = xn
-        self.init = init
-        self.bad = goal
-        self.trans = trans
-        self.min_cube_solver = fd_solver()
-        self.min_cube_solver.add(Not(trans))
-        self.goals = []
-        s = State(fd_solver())
-        s.add(init)
-        s.solver.add(trans)
-        self.states = [s]
-        self.s_bad = fd_solver()
-        self.s_good = fd_solver()
-        self.s_bad.add(self.bad)
-        self.s_good.add(Not(self.bad))
+def values2literals(m, xs):
+    p = [value2literal(m, x) for x in xs]
+    return [x for x in p if x is not None]
 
-    def next(self, f):
-        if is_seq(f):
-            return [self.next(f1) for f1 in f]
-        return substitute(f, zip(self.x0, self.xn))
-
-    def prev(self, f):
-        if is_seq(f):
-            return [self.prev(f1) for f1 in f]
-        return substitute(f, zip(self.xn, self.x0))
-
-        # add a new frame to states, each state solver contains a new solver that
-
-    # embed a transition
-    def add_solver(self):
-        s = fd_solver()
-        s.add(self.trans)
-        self.states += [State(s)]
-
-        # retrive the lemmas of f_i
-
-    def R(self, i):
-        return And(self.states[i].R)
-
-    # Check if there are two states next to each other that have the same clauses.
-    def is_valid(self):
-        i = 1
-        while i + 1 < len(self.states):
-            if not (self.states[i].R - self.states[i + 1].R):
-                return And(prune(self.states[i].R))
-            i += 1
-        return None
-
-    def value2literal(self, m, x):
-        value = m.eval(x)
-        if is_true(value):
-            return x
-        if is_false(value):
-            return Not(x)
-        return None
-
-    def values2literals(self, m, xs):
-        p = [self.value2literal(m, x) for x in xs]
-        return [x for x in p if x is not None]
-
-    def project0(self, m):
-        return self.values2literals(m, self.x0)
-
-    def projectI(self, m):
-        return self.values2literals(m, self.inputs)
-
-    def projectN(self, m):
-        return self.values2literals(m, self.xn)
-
-    # Determine if there is a cube for the current state
-    # that is potentially reachable.
-    def unfold(self):
-        core = []
-        # add a checkpoint
-        self.s_bad.push()
-        R = self.R(len(self.states) - 1)
-        self.s_bad.add(R)
-        is_sat = self.s_bad.check()
-        if is_sat == sat:
-            m = self.s_bad.model()
-            cube = self.project0(m)
-            props = cube + self.projectI(m)
-            self.s_good.push()
-            self.s_good.add(R)
-            is_sat2 = self.s_good.check(props)
-            assert is_sat2 == unsat
-            core = self.s_good.unsat_core()
-            core = [c for c in core if c in set(cube)]
-            self.s_good.pop()
-        self.s_bad.pop()
-        return is_sat, core
-
-    # Block a cube by asserting the clause corresponding to its negation
-    def block_cube(self, i, cube):
-        self.assert_clause(i, cube2clause(cube))
-
-    # Add a clause to levels 0 until i
-    def assert_clause(self, i, clause):
-        for j in range(i + 1):
-            self.states[j].add(clause)
-
-    # minimize cube that is core of Dual solver.
-    # this assumes that props & cube => Trans
-    def minimize_cube(self, cube, inputs, lits):
-        is_sat = self.min_cube_solver.check(lits + [c for c in cube] + [i for i in inputs])
-        assert is_sat == unsat
-        core = self.min_cube_solver.unsat_core()
-        assert core
-        return [c for c in core if c in set(cube)]
-
-    # push a goal on a heap
-    def push_heap(self, goal):
-        heapq.heappush(self.goals, (goal.level, goal))
-
-    # A state s0 and level f0 such that
-    # not(s0) is f0-1 inductive
-    def ic3_blocked(self, s0, f0):
-        self.push_heap(Goal(self.next(s0), None, f0))
-        while self.goals:
-            f, g = heapq.heappop(self.goals)
-            sys.stdout.write("%d." % f)
-            sys.stdout.flush()
-            # Not(g.cube) is f-1 invariant
-            if f == 0:
-                print("")
-                return g
-            cube, f, is_sat = self.is_inductive(f, g.cube)
-            if is_sat == unsat:
-                self.block_cube(f, self.prev(cube))
-                if f < f0:
-                    self.push_heap(Goal(g.cube, g.parent, f + 1))
-            elif is_sat == sat:
-                self.push_heap(Goal(cube, g, f - 1))
-                self.push_heap(g)
-            else:
-                return is_sat
-        print("")
-        return None
-
-    # Rudimentary generalization:
-    # If the cube is already unsat with respect to transition relation
-    # extract a core (not necessarily minimal)
-    # otherwise, just return the cube.
-    def generalize(self, cube, f):
-        s = self.states[f - 1].solver
-        if unsat == s.check(cube):
-            core = s.unsat_core()
-            if not check_disjoint(self.init, self.prev(And(core))):
-                return core, f
-        return cube, f
-
-    # Check if the negation of cube is inductive at level f
-    def is_inductive(self, f, cube):
-        s = self.states[f - 1].solver
-        s.push()
-        s.add(self.prev(Not(And(cube))))
-        is_sat = s.check(cube)
-        if is_sat == sat:
-            m = s.model()
-        s.pop()
-        if is_sat == sat:
-            cube = self.next(self.minimize_cube(self.project0(m), self.projectI(m), self.projectN(m)))
-        elif is_sat == unsat:
-            cube, f = self.generalize(cube, f)
-        return cube, f, is_sat
-
-    def run(self):
-        if not check_disjoint(self.init, self.bad):
-            return "goal is reached in initial state"
-        level = 0
-        while True:
-            inv = self.is_valid()
-            if inv is not None:
-                return inv
-            is_sat, cube = self.unfold()
-            if is_sat == unsat:
-                level += 1
-                print("Unfold %d" % level)
-                sys.stdout.flush()
-                self.add_solver()
-            elif is_sat == sat:
-                cex = self.ic3_blocked(cube, level)
-                if cex is not None:
-                    return cex
-            else:
-                return is_sat
+def project_var(m, vars):
+    return values2literals(m, vars)
 
 
-    def partition_bad_state(self, h2t):
-        partitioner = fd_solver()
-        good_solver = fd_solver()
+def partition_bad_state(h2t, partition_num):
+    partitioner = fd_solver()
+    good_solver = fd_solver()
+    partitioner.add(h2t.goal)
+    good_solver.add(Not(h2t.goal))
+    bad_states = []
+    # partition the bad state
+    while sat == partitioner.check():
+        m = partitioner.model()
+        cube = project_var(m, h2t.xs) + project_var(m, h2t.inputs)
+        # good_solver.check(cube)
+        # assert (good_solver.check(cube) == unsat)
+        # core = good_solver.unsat_core()
+        partitioner.add(Not(And(cube)))
+        bad_states.append(And(cube))
 
-        partitioner.add(h2t.goal)
-        good_solver.add(Not(h2t.goal))
-        bsize = 1
-        batches = []
-        batch = []
-        # partition the bad state
-        while sat == partitioner.check():
-            m = partitioner.model()
-            cube = self.project0(m) + self.projectI(m)
-            # good_solver.check(cube)
-            # assert (good_solver.check(cube) == unsat)
-            # core = good_solver.unsat_core()
-            partitioner.add(Not(And(cube)))
-            batch.append(And(cube))
-            if len(batch) == bsize:
-                batches.append(batch)
-                batch = []
-
-            instances = []
-            for batch in batches:
-                subgoal = batch[0]
-                if len(batch) > 1:
-                    subgoal = Or(batch)
-                instances.append(MiniIC3(h2t.init, h2t.trans, subgoal, h2t.xs, h2t.inputs, h2t.xns))
-
-
-
-
-
-
-
+    batch_size = int(math.ceil(float(len(bad_states)) / float(partition_num)))
+    subgoals = []
+    batch = []
+    count = 0
+    for bad in bad_states:
+        count += 1
+        batch.append(bad)
+        if count == batch_size and count > 1:
+            subgoals.append(" ".join(str(Or(batch)).split()))
+            count = 0
+            batch = []
+    if len(batch) > 0:
+        if len(batch) > 1:
+            subgoals.append(" ".join(str(Or(batch)).split()))
+        else:
+            subgoals.append(" ".join(str(batch[0]).split()))
+    return subgoals
 
 
+# test lambda expression
+def invoke_lambda_function(model, vars, goal):
+    session = boto3.session.Session()
+    client = session.client('lambda')
 
+    event = {}
+    event['init'] = str(model[0])
+    event['trans'] = str(model[1])
+    event['goal'] = str(goal)
+    event['inputs'] = " ".join(vars[0])
+    event['xs'] = " ".join(vars[1])
+    event['xns'] = " ".join(vars[2])
 
-
+    response = client.invoke(
+        FunctionName='pic3lambda',
+        InvocationType='RequestResponse',
+        LogType='Tail',
+        Payload=json.dumps(event)
+    )
+    resp = json.loads(response['Payload'].read())
+    print resp
+    return resp['message']
 
 
 def test(file):
     h2t = Horn2Transitions()
     h2t.parse(file)
-    mp = MiniIC3(h2t.init, h2t.trans, h2t.goal, h2t.xs, h2t.inputs, h2t.xns)
-    mp.partition_bad_state(h2t.goal)
+    input_list = map(lambda x: str(x), h2t.inputs)
+    xs_list = map(lambda x: str(x), h2t.xs)
+    xns_list = map(lambda x: str(x), h2t.xns)
+    vars = [input_list, xs_list, xns_list]
 
+    initstr = str(h2t.init)
+    transtr = str(h2t.trans)
+    model = [initstr, transtr]
+
+    worker_num = 10
+    subgoals = partition_bad_state(h2t, worker_num)
+    print subgoals
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(subgoals)) as executor:
+        term = True
+        ret = 'SAT'
+        inv_reached = 0
+        future_lambda = {executor.submit(invoke_lambda_function, model[:], vars[:], subgoal): subgoal for subgoal in subgoals}
+        while term:
+            completed_future = concurrent.futures.as_completed(future_lambda, timeout=None)
+            for future in completed_future:
+                # subgoal = future_lambda[future]
+                del future_lambda[future]
+                try:
+                    response = future.result()
+                    print response
+                except Exception as exc:
+                    print('%r generated an exception: %s' % ("future", exc))
+                else:
+                    if response == 'nondet':
+                        #bound reached resubmit another job
+                        #add future to future lambda
+                        break
+                    elif response == 'cex':
+                        term = False
+                        break
+                    else:#reach an inv
+                        inv_reached += 1
+                        if len(subgoals) == inv_reached:
+                            term = False
+                            ret = 'UNSAT'
+                            break
+
+
+        return ret
 
 if __name__ == '__main__':
+    print test("data/horn4.smt2")
     # test("data/horn1.smt2")
     # test("data/horn2.smt2")
     # test("data/horn3.smt2")
-    test("data/horn4.smt2")
     #test("data/horn5.smt2")
     #test("data/horn6.smt2") # takes long time to finish

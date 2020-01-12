@@ -2,128 +2,6 @@ from z3 import *
 import heapq
 import re
 
-
-# Simplistic (and fragile) converter from
-# a class of Horn clauses corresponding to
-# a transition system into a transition system
-# representation as <init, trans, goal>
-# It assumes it is given three Horn clauses
-# of the form:
-#  init(x) => Invariant(x)
-#  Invariant(x) and trans(x,x') => Invariant(x')
-#  Invariant(x) and goal(x) => Goal(x)
-# where Invariant and Goal are uninterpreted predicates
-
-class Horn2Transitions:
-    def __init__(self):
-        self.trans = True
-        self.init = True
-        self.inputs = []
-        self.goal = True
-        self.index = 0
-
-    def parse(self, file):
-        fp = Fixedpoint()
-        goals = fp.parse_file(file)
-        for r in fp.get_rules():
-            if not is_quantifier(r):
-                continue
-            b = r.body()
-            if not is_implies(b):
-                continue
-            f = b.arg(0)
-            g = b.arg(1)
-            if self.is_goal(f, g):
-                continue
-            if self.is_transition(f, g):
-                continue
-            if self.is_init(f, g):
-                continue
-
-    def is_pred(self, p, name):
-        return is_app(p) and p.decl().name() == name
-
-    def is_goal(self, body, head):
-        if not self.is_pred(head, "Goal"):
-            return False
-        pred, inv = self.is_body(body)
-        if pred is None:
-            return False
-        self.goal = self.subst_vars("x", inv, pred)
-        self.goal = self.subst_vars("i", self.goal, self.goal)
-        self.inputs += self.vars
-        self.inputs = list(set(self.inputs))
-        return True
-
-    def is_body(self, body):
-        if not is_and(body):
-            return None, None
-        fmls = [f for f in body.children() if self.is_inv(f) is None]
-        inv = None
-        for f in body.children():
-            if self.is_inv(f) is not None:
-                inv = f;
-                break
-        return And(fmls), inv
-
-    def is_inv(self, f):
-        if self.is_pred(f, "Invariant"):
-            return f
-        return None
-
-    def is_transition(self, body, head):
-        pred, inv0 = self.is_body(body)
-        if pred is None:
-            return False
-        inv1 = self.is_inv(head)
-        if inv1 is None:
-            return False
-        pred = self.subst_vars("x", inv0, pred)
-        self.xs = self.vars
-        pred = self.subst_vars("xn", inv1, pred)
-        self.xns = self.vars
-        pred = self.subst_vars("i", pred, pred)
-        self.inputs += self.vars
-        self.inputs = list(set(self.inputs))
-        self.trans = pred
-        return True
-
-    def is_init(self, body, head):
-        for f in body.children():
-            if self.is_inv(f) is not None:
-                return False
-        inv = self.is_inv(head)
-        if inv is None:
-            return False
-        self.init = self.subst_vars("x", inv, body)
-        return True
-
-    def subst_vars(self, prefix, inv, fml):
-        subst = self.mk_subst(prefix, inv)
-        self.vars = [v for (k, v) in subst]
-        return substitute(fml, subst)
-
-    def mk_subst(self, prefix, inv):
-        self.index = 0
-        if self.is_inv(inv) is not None:
-            return [(f, self.mk_bool(prefix)) for f in inv.children()]
-        else:
-            vars = self.get_vars(inv)
-            return [(f, self.mk_bool(prefix)) for f in vars]
-
-    def mk_bool(self, prefix):
-        self.index += 1
-        return Bool("%s%d" % (prefix, self.index))
-
-    def get_vars(self, f, rs=[]):
-        if is_var(f):
-            return z3util.vset(rs + [f], str)
-        else:
-            for f_ in f.children():
-                rs = self.get_vars(f_, rs)
-            return z3util.vset(rs, str)
-
-
 # Produce a finite domain solver.
 # The theory QF_FD covers bit-vector formulas
 # and pseudo-Boolean constraints.
@@ -131,12 +9,10 @@ class Horn2Transitions:
 # constraints are converted to clauses. To override
 # this default for cardinality constraints
 # we set sat.cardinality.solver to True
-
 def fd_solver():
     s = SolverFor("QF_FD")
     s.set("sat.cardinality.solver", True)
     return s
-
 
 # negate, avoid double negation
 def negate(f):
@@ -386,62 +262,34 @@ class MiniIC3:
             else:
                 return is_sat
 
-
-def test(file):
-    h2t = Horn2Transitions()
-    h2t.parse(file)
-    mp = MiniIC3(h2t.init, h2t.trans, h2t.goal, h2t.xs, h2t.inputs, h2t.xns)
-    result = mp.run()
-    if isinstance(result, Goal):
-        g = result
-        print("Trace")
-        while g:
-            print(g.level, g.cube)
-            g = g.parent
-        return
-    if isinstance(result, ExprRef):
-        print("Invariant:\n%s " % result)
-        return
-    print(result)
-
-
 # test("data/horn1.smt2")
 # test("data/horn2.smt2")
 # test("data/horn3.smt2")
 # test("data/horn4.smt2")
 # test("data/horn5.smt2")
-
-
 # test("data/horn6.smt2") # takes long time to finish
 
-
 def handler(event, context):
-    event = {
-      "init": "Not(Or(x1))",
-      "trans": "And(And(Not(x1), Not(i1)) == i2, And(x1, i1) == i3, And(Not(i3), Not(i2)) == xn1)",
-      "goal": "And(x1)",
-      "inputs": "i1 i2 i3",
-      "xs": "x1",
-      "xns": "xn1"
-    }
+    init_str = str(event['init'])
+    trans_str = str(event['trans'])
+    goal_str = str(event['goal'])
+    inputs_str = str(event['inputs'])
+    xs_str = str(event['xs'])
+    xns_str = str(event['xns'])
 
-    init_str = event['init']
-    trans_str = event['trans']
-    goal_str = event['goal']
-    inputs_str = event['inputs']
-    xs_str = event['xs']
-    xns_str = event['xns']
 
     variables = "{0} {1} {2}".format(xs_str, inputs_str, xns_str)
+    print variables
     v_list = variables.split()
+    print v_list
     var_str = "{0} = Bools('{1}')".format(",".join(v_list), " ".join(v_list))
     print var_str
 
     exec var_str
 
-    xs = Bools(xs_str)
-    inputs = Bools(inputs_str)
-    xns = Bools(xns_str)
+    xs = Bools(str(xs_str))
+    inputs = Bools(str(inputs_str))
+    xns = Bools(str(xns_str))
 
     init = eval(init_str)
     goal = eval(goal_str)
@@ -451,6 +299,13 @@ def handler(event, context):
     trans_str = re.sub(r'(.*)AtMost\(\((.*)\), ([0-9])\)', r'\1AtMost(\2, \3)', trans_str)
     trans = eval(trans_str)
 
+    print init
+    print trans
+    print goal
+    print xs
+    print inputs
+    print xns
+
     mp = MiniIC3(init, trans, goal, xs, inputs, xns)
     result = mp.run()
     if isinstance(result, Goal):
@@ -459,11 +314,10 @@ def handler(event, context):
         while g:
             print(g.level, g.cube)
             g = g.parent
-        return
+        return {'message': 'cex'}
     if isinstance(result, ExprRef):
         print("Invariant:\n%s " % result)
-        return
+        return {'message': str(result)}
 
     return {'message': result}
 
-handler({},{})
