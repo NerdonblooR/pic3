@@ -5,6 +5,9 @@ import boto3
 import json
 import concurrent.futures
 import math
+import time
+import random
+import re
 
 
 # Simplistic (and fragile) converter from
@@ -66,7 +69,7 @@ class Horn2Transitions:
         inv = None
         for f in body.children():
             if self.is_inv(f) is not None:
-                inv = f;
+                inv = f
                 break
         return And(fmls), inv
 
@@ -164,14 +167,17 @@ class State:
             self.R |= {clause}
             self.solver.add(clause)
 
+
 class Goal:
     def __init__(self, cube, parent, level):
         self.level = level
         self.cube = cube
         self.parent = parent
 
+
 def is_seq(f):
     return isinstance(f, list) or isinstance(f, tuple) or isinstance(f, AstVector)
+
 
 # Check if the initial state is bad
 def check_disjoint(a, b):
@@ -179,6 +185,7 @@ def check_disjoint(a, b):
     s.add(a)
     s.add(b)
     return unsat == s.check()
+
 
 # Remove clauses that are subsumed
 def prune(R):
@@ -194,6 +201,7 @@ def prune(R):
         s.pop()
     return R - removed
 
+
 def value2literal(m, x):
     value = m.eval(x)
     if is_true(value):
@@ -202,12 +210,19 @@ def value2literal(m, x):
         return Not(x)
     return None
 
+
 def values2literals(m, xs):
     p = [value2literal(m, x) for x in xs]
     return [x for x in p if x is not None]
 
+
 def project_var(m, vars):
     return values2literals(m, vars)
+
+
+'''
+Partition bad states by retrieving bad state assignment
+'''
 
 
 def partition_bad_state(h2t, partition_num):
@@ -229,15 +244,21 @@ def partition_bad_state(h2t, partition_num):
     batch_size = int(math.ceil(float(len(bad_states)) / float(partition_num)))
     subgoals = []
     batch = []
+    print len(bad_states)
+    print batch_size
     count = 0
     for bad in bad_states:
         count += 1
         batch.append(bad)
-        if count == batch_size and count > 1:
-            subgoals.append(" ".join(str(Or(batch)).split()))
+        if count == batch_size:
+            if len(batch) > 1:
+                subgoals.append(" ".join(str(Or(batch)).split()))
+            else:
+                subgoals.append(" ".join(str(batch[0]).split()))
             count = 0
             batch = []
-    if len(batch) > 0:
+
+    if len(batch):
         if len(batch) > 1:
             subgoals.append(" ".join(str(Or(batch)).split()))
         else:
@@ -245,18 +266,81 @@ def partition_bad_state(h2t, partition_num):
     return subgoals
 
 
+def retrieve_shared_variables(init, bad):
+    init_var = set(re.findall(r'x[0-9]+', init))
+    bad_var = set(re.findall(r'x[0-9]+', bad))
+    ret = list(init_var & bad_var)
+    return ret
+
+
+def enumerate_all_assignment(num_var):
+    ret = [[]]
+    for i in range(num_var):
+        new_ret = []
+        for elem in ret:
+            elem_cpy_0 = elem[:]
+            elem_cpy_1 = elem[:]
+            elem_cpy_0.append(0)
+            elem_cpy_1.append(1)
+            new_ret.append(elem_cpy_0)
+            new_ret.append(elem_cpy_1)
+        ret = new_ret
+    return ret
+
+
+'''
+Another way to partition the bad states
+'''
+
+
+def partition_bad_state_shared_variable(init, goal, partition_exp):
+    shared_vars = retrieve_shared_variables(init, goal)
+    if len(shared_vars) < partition_exp:
+        shared_vars = random.choice(shared_vars)
+
+    var_num = len(shared_vars)
+    all_assign = enumerate_all_assignment(var_num)
+
+    subgoals = []
+    for assign in all_assign:
+        sub_goal_list = []
+        for i in range(var_num):
+            var = Bool(shared_vars[i])
+            if assign[i]:
+                sub_goal_list.append(var)
+            else:
+                sub_goal_list.append(Not(var))
+        subgoals.append(str(And(sub_goal_list)))
+
+    return subgoals
+
+
+"""
+invoke a lambda funciton
+"""
 # test lambda expression
-def invoke_lambda_function(model, vars, goal):
+def invoke_lambda_function(id, model, model_vars, goal, mode, re_sub):
     session = boto3.session.Session()
     client = session.client('lambda')
+    event = {'init': str(model[0]), 'trans': str(model[1]), 'goal': str(goal), 'inputs': " ".join(model_vars[0]),
+             'xs': " ".join(model_vars[1]), 'xns': " ".join(model_vars[2]), 'r': 0, 'backward': 0, 'id': id}
 
-    event = {}
-    event['init'] = str(model[0])
-    event['trans'] = str(model[1])
-    event['goal'] = str(goal)
-    event['inputs'] = " ".join(vars[0])
-    event['xs'] = " ".join(vars[1])
-    event['xns'] = " ".join(vars[2])
+    # backward_pdr
+    if mode == 'b':
+        # generate reverse pdr by:
+        # 1. xs in init and goal to xn
+        # 2. flip goal and inputs
+        event['init'] = str(goal).replace('x', 'xn')
+        event['trans'] = str(model[1])
+        event['goal'] = str(model[0]).replace('x', 'xn')
+        event['inputs'] = " ".join(model_vars[0])
+        event['xs'] = " ".join(model_vars[1])
+        event['xns'] = " ".join(model_vars[2])
+        event['backward'] = 1
+
+    # re-submit if bound of an instance is reached
+    if re_sub:
+        event['r'] = 1
 
     response = client.invoke(
         FunctionName='pic3lambda',
@@ -265,8 +349,16 @@ def invoke_lambda_function(model, vars, goal):
         Payload=json.dumps(event)
     )
     resp = json.loads(response['Payload'].read())
-    print resp
+    # print resp
     return resp['message']
+
+
+def retrieve_completed_task(futures):
+    done = []
+    for future in futures:
+        if future.done():
+            done.append(future)
+    return done
 
 
 def test(file):
@@ -275,52 +367,90 @@ def test(file):
     input_list = map(lambda x: str(x), h2t.inputs)
     xs_list = map(lambda x: str(x), h2t.xs)
     xns_list = map(lambda x: str(x), h2t.xns)
-    vars = [input_list, xs_list, xns_list]
+    model_vars = [input_list, xs_list, xns_list]
 
-    initstr = str(h2t.init)
-    transtr = str(h2t.trans)
-    model = [initstr, transtr]
+    init_str = str(h2t.init)
+    trans_str = str(h2t.trans)
+    model = [init_str, trans_str]
 
-    worker_num = 10
-    subgoals = partition_bad_state(h2t, worker_num)
-    print subgoals
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(subgoals)) as executor:
+    partition_exp = 10
+    sub_goals = partition_bad_state_shared_variable(h2t.init, h2t.goal, partition_exp)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(sub_goals) * 2) as executor:
+        print "Initializing {0} workers: ".format(len(sub_goals))
         term = True
         ret = 'SAT'
-        inv_reached = 0
-        future_lambda = {executor.submit(invoke_lambda_function, model[:], vars[:], subgoal): subgoal for subgoal in subgoals}
+        inv_reached = set()
+
+        # dictionaries for
+        lambda_futures = {}
+        lambda_modes = {}
+        lambda_resub_times = {}
+        lambda_id = {}
+
+        count = 0
+
+        for sub_goal in sub_goals:
+            f_forward = executor.submit(invoke_lambda_function, count, model[:], model_vars[:], sub_goal, "", 0)
+            lambda_id[f_forward] = count
+            count += 1
+            f_backward = executor.submit(invoke_lambda_function, count, model[:], model_vars[:], sub_goal, "b", 0)
+            lambda_id[f_backward] = count
+            count += 1
+
+            lambda_futures[f_forward] = sub_goal
+            lambda_futures[f_backward] = sub_goal
+            lambda_modes[f_forward] = ""
+            lambda_modes[f_backward] = "b"
+            lambda_resub_times[f_forward] = 0
+            lambda_resub_times[f_backward] = 0
+
         while term:
-            completed_future = concurrent.futures.as_completed(future_lambda, timeout=None)
+            completed_future = retrieve_completed_task(lambda_futures)
+            print "Waiting for workers to complete..."
             for future in completed_future:
-                # subgoal = future_lambda[future]
-                del future_lambda[future]
+                sub_goal = lambda_futures[future]
+                del lambda_futures[future]
                 try:
                     response = future.result()
-                    print response
                 except Exception as exc:
                     print('%r generated an exception: %s' % ("future", exc))
                 else:
                     if response == 'nondet':
-                        #bound reached resubmit another job
-                        #add future to future lambda
-                        break
+                        # bound reached resubmit another job
+                        mode = lambda_modes[future]
+                        resub_times = lambda_resub_times[future] + 1
+                        task_id = lambda_id[future]
+
+                        del lambda_modes[future]
+                        del lambda_resub_times[future]
+                        del lambda_id[future]
+
+                        f = executor.submit(invoke_lambda_function, task_id, model[:], model_vars[:], sub_goal, mode,
+                                            resub_times)
+
+                        lambda_futures[f] = sub_goal
+                        lambda_modes[f] = mode
+                        lambda_resub_times[f] = resub_times
+                        lambda_id[f] = task_id
+
                     elif response == 'cex':
                         term = False
                         break
-                    else:#reach an inv
-                        inv_reached += 1
-                        if len(subgoals) == inv_reached:
+                    else:  # reach an inv
+                        print "Worker [sub-goal: {0}] completes\n Invariant:\n {1}".format(sub_goal, response)
+                        inv_reached.add(sub_goal)
+                        # print subgoal
+                        if len(sub_goals) == len(inv_reached):
                             term = False
                             ret = 'UNSAT'
                             break
-
-
+            time.sleep(1)
         return ret
 
+
 if __name__ == '__main__':
-    print test("data/horn4.smt2")
+    # print test("data/horn4.smt2")
     # test("data/horn1.smt2")
     # test("data/horn2.smt2")
     # test("data/horn3.smt2")
-    #test("data/horn5.smt2")
-    #test("data/horn6.smt2") # takes long time to finish
+    print enumerate_all_assignment(3)

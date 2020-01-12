@@ -1,6 +1,12 @@
 from z3 import *
 import heapq
 import re
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+import time
+
+BOUND = 10
+
 
 # Produce a finite domain solver.
 # The theory QF_FD covers bit-vector formulas
@@ -13,6 +19,7 @@ def fd_solver():
     s = SolverFor("QF_FD")
     s.set("sat.cardinality.solver", True)
     return s
+
 
 # negate, avoid double negation
 def negate(f):
@@ -71,8 +78,8 @@ def prune(R):
     return R - removed
 
 
-class MiniIC3:
-    def __init__(self, init, trans, goal, x0, inputs, xn):
+class BoundedIC3:
+    def __init__(self, init, trans, goal, x0, inputs, xn, re_sub_times, backward, var_str, task_id):
         self.x0 = x0
         self.inputs = inputs
         self.xn = xn
@@ -90,6 +97,14 @@ class MiniIC3:
         self.s_good = fd_solver()
         self.s_bad.add(self.bad)
         self.s_good.add(Not(self.bad))
+        # Add by Hao
+        # the bound on the number of frames:
+        self.task_id = task_id
+        self.resub = re_sub_times
+        self.bound = BOUND * (re_sub_times + 1)
+        self.backward = backward
+        self.var_str = var_str
+        self.last_pull = 0
 
     def next(self, f):
         if is_seq(f):
@@ -195,8 +210,8 @@ class MiniIC3:
         self.push_heap(Goal(self.next(s0), None, f0))
         while self.goals:
             f, g = heapq.heappop(self.goals)
-            sys.stdout.write("%d." % f)
-            sys.stdout.flush()
+            # sys.stdout.write("%d." % f)
+            # sys.stdout.flush()
             # Not(g.cube) is f-1 invariant
             if f == 0:
                 print("")
@@ -204,6 +219,10 @@ class MiniIC3:
             cube, f, is_sat = self.is_inductive(f, g.cube)
             if is_sat == unsat:
                 self.block_cube(f, self.prev(cube))
+                #Add by Hao:
+                if self.is_true_inductive(cube):
+                    #Hao: this is an inductive lemma, share it
+                    self.push_lemmas(cube2clause(cube))
                 if f < f0:
                     self.push_heap(Goal(g.cube, g.parent, f + 1))
             elif is_sat == sat:
@@ -241,11 +260,119 @@ class MiniIC3:
             cube, f = self.generalize(cube, f)
         return cube, f, is_sat
 
+    # Check if the negation of cube is inductive relative to true
+    def is_true_inductive(self, cube):
+        s = State(fd_solver())
+        s.add(self.init)
+        s.solver.add(self.trans)
+        s.push()
+        s.add(self.prev(Not(And(cube))))
+        is_sat = s.check(cube)
+        return is_sat == unsat
+
+
+
+
+    """
+    Checkpoint current state
+    """
+
+    def checkpoint(self):
+        dynamodb = boto3.resource('dynamo')
+        table = dynamodb.Table('ic3state')
+        for i in range(self.states):
+            state = self.states[i]
+            lemma_count = 0
+            for lemma in state.R:
+                # generate
+                lemma_id = '{0}:{1}'.format(i, lemma_count)
+                lemma_count += 1
+                response = table.put_item(
+                    Item={
+                        'task_id': self.task_id,
+                        'lemma_id': lemma_id,
+                        'lemma': str(lemma)
+                    }
+                )
+                print response
+
+    """
+    Restore from checkpoint
+    """
+
+    def restore(self):
+        dynamodb = boto3.resource('dynamo')
+        table = dynamodb.Table('ic3state')
+        previous_bound = self.bound - BOUND
+
+        # construct frames:
+        for i in range(previous_bound):
+            self.add_solver()
+
+        exec self.var_str
+
+        # get all records associate with my task id
+        response = table.scan(
+            FilterExpression=Key('task_id').eq(self.task_id)
+        )
+        # process records
+        for i in response['Items']:
+            lemma_id = i['lemma_id']
+            frame_lemma = lemma_id.split(':')
+            frame = int(frame_lemma[0])
+            lemma = eval(i['lemma'])
+            self.states[frame].add(lemma)
+
+    def pull_lemmas(self):
+        dynamodb = boto3.resource('dynamo')
+        table = dynamodb.Table('ic3lemmadb')
+        exec self.var_str
+
+        # pull all lemma shared since last pull
+        response = table.scan(
+            FilterExpression=Attr('task_id').ne(self.task_id) & Key('timestamp').gt(self.last_pull)
+        )
+        self.last_pull = time.time()
+        # since all lemmas are inductive, add to all frames
+        for i in response['Items']:
+            lemma = eval(i['lemma'])
+            # add to all frame:
+            for state in self.states:
+                state.add(lemma)
+
+
+
+    def push_lemmas(self, lemma):
+        dynamodb = boto3.resource('dynamo')
+        table = dynamodb.Table('ic3lemmadb')
+        timestamp = int(round(time.time() * 1000))
+        id = '{0}.{1}'.format(self.task_id, timestamp)
+        response = table.put_item(
+            Item={
+                'lemma_id':  id,
+                'time_stamp': timestamp,
+                'task_id': self.task_id,
+                'lemma': str(lemma)
+            }
+        )
+        print response
+
     def run(self):
+        if self.resub:
+            self.restore()
+
         if not check_disjoint(self.init, self.bad):
             return "goal is reached in initial state"
         level = 0
         while True:
+            # pull lemmas
+            self.pull_lemmas()
+
+            # bound reached
+            if level > self.bound:
+                self.checkpoint()
+                return "nondet"
+
             inv = self.is_valid()
             if inv is not None:
                 return inv
@@ -262,12 +389,6 @@ class MiniIC3:
             else:
                 return is_sat
 
-# test("data/horn1.smt2")
-# test("data/horn2.smt2")
-# test("data/horn3.smt2")
-# test("data/horn4.smt2")
-# test("data/horn5.smt2")
-# test("data/horn6.smt2") # takes long time to finish
 
 def handler(event, context):
     init_str = str(event['init'])
@@ -276,7 +397,9 @@ def handler(event, context):
     inputs_str = str(event['inputs'])
     xs_str = str(event['xs'])
     xns_str = str(event['xns'])
-
+    back_bit = int(event['backward'])
+    resub_times = int(event['r'])
+    task_id = int(event['id'])
 
     variables = "{0} {1} {2}".format(xs_str, inputs_str, xns_str)
     print variables
@@ -294,20 +417,13 @@ def handler(event, context):
     init = eval(init_str)
     goal = eval(goal_str)
 
-    print trans_str
     trans_str = trans_str.replace("\n", "")
     trans_str = re.sub(r'(.*)AtMost\(\((.*)\), ([0-9])\)', r'\1AtMost(\2, \3)', trans_str)
     trans = eval(trans_str)
 
-    print init
-    print trans
-    print goal
-    print xs
-    print inputs
-    print xns
-
-    mp = MiniIC3(init, trans, goal, xs, inputs, xns)
+    mp = BoundedIC3(init, trans, goal, xs, inputs, xns, resub_times, back_bit, task_id, var_str, task_id)
     result = mp.run()
+
     if isinstance(result, Goal):
         g = result
         print("Trace")
@@ -320,4 +436,3 @@ def handler(event, context):
         return {'message': str(result)}
 
     return {'message': result}
-

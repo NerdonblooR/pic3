@@ -4,6 +4,7 @@ import re
 import json
 import boto3
 import pickle
+import datetime
 
 # Simplistic (and fragile) converter from
 # a class of Horn clauses corresponding to 
@@ -463,15 +464,21 @@ def partition_bad_state(h2t, partition_num):
     batch_size = int(math.ceil(float(len(bad_states)) / float(partition_num)))
     subgoals = []
     batch = []
+    print len(bad_states)
+    print batch_size
     count = 0
     for bad in bad_states:
         count += 1
         batch.append(bad)
-        if count == batch_size and count > 1:
-            subgoals.append(" ".join(str(Or(batch)).split()))
+        if count == batch_size:
+            if len(batch) > 1:
+                subgoals.append(" ".join(str(Or(batch)).split()))
+            else:
+                subgoals.append(" ".join(str(batch[0]).split()))
             count = 0
             batch = []
-    if len(batch) > 0:
+
+    if len(batch):
         if len(batch) > 1:
             subgoals.append(" ".join(str(Or(batch)).split()))
         else:
@@ -541,32 +548,59 @@ trans_str = trans_str.replace("\n", "")
 trans_str = re.sub(r'(.*)AtMost\(\((.*)\), ([0-9])\)', r'\1AtMost(\2, \3)', trans_str)
 trans = eval(trans_str)
 
-print "======================================"
-# init_str = 'Not(Or(xn1, xn2, xn3, xn4, xn5, xn6, xn7, xn8, xn9, xn10))'
-# goal_str = 'And(Not(xn1), Not(xn2), Not(xn3), Not(xn4), xn5)'
-# init = eval(init_str)
-# goal = eval(goal_str)
-# mp = MiniIC3(goal, trans, init, xns, inputs, xs)
-#
-# mp = MiniIC3(init, trans, goal, xs, inputs, xns)
-#
-# result = mp.run()
-# if isinstance(result, Goal):
-#     g = result
-#     print("Trace")
-#     while g:
-#         print(g.level, g.cube)
-#         g = g.parent
-# if isinstance(result, ExprRef):
-#     print("Invariant:\n%s " % result)
 
-# response = invoke_lambda_function(h2t, str(goal))
-# print response
-ps = partition_bad_state(h2t, 10)
+def partition_bad_state_demo(goal):
+    subgoals = []
+    for i in [0,1]:
+        for j in [0,1]:
+            x1 = Bool('x1')
+            x2 = Bool('x2')
+            if not i:
+                x1 = Not(x1)
+            if not j:
+                x2 = Not(x2)
+            subgoals.append(str(And(goal,x1,x2)))
+    return  subgoals
+
+
+print "======================================"
+ps = partition_bad_state_demo(h2t.goal)
+print ps
 for subgoal in ps:
     print subgoal
-    response = invoke_lambda_function(h2t, subgoal)
-    print response
+
+# init_str = init_str.replace('x','xn')
+# goal_str = 'Or(And(x1, x4, Not(x7), Not(i4), Not(i3), i2, Not(i1)))'
+# goal_str = goal_str.replace('x','xn')
+# print goal_str
+# init = eval(init_str)
+#goal = eval(ps[3])
+#
+# mp = MiniIC3(goal, trans, init, xns, inputs, xs)
+#
+mp = MiniIC3(init, trans, goal, xs, inputs, xns)
+# #
+start = datetime.datetime.now()
+result = mp.run()
+print result
+if isinstance(result, Goal):
+    g = result
+    print("Trace")
+    while g:
+        print(g.level, g.cube)
+        g = g.parent
+if isinstance(result, ExprRef):
+    print("Invariant:\n%s " % result)
+end = datetime.datetime.now()
+diff = end - start
+print float(diff.microseconds) / float(1000)
+# response = invoke_lambda_function(h2t, str(goal))
+# print response
+# print init_str
+# print goal_str
+
+    # response = invoke_lambda_function(h2t, subgoal)
+    # print response
     # goal = eval(subgoal)
     # mp = MiniIC3(init, trans, goal, xs, inputs, xns)
     # result = mp.run()
