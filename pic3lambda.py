@@ -262,23 +262,20 @@ class BoundedIC3:
 
     # Check if the negation of cube is inductive relative to true
     def is_true_inductive(self, cube):
-        s = State(fd_solver())
+        s = fd_solver()
         s.add(self.init)
-        s.solver.add(self.trans)
+        s.add(self.trans)
         s.push()
         s.add(self.prev(Not(And(cube))))
         is_sat = s.check(cube)
         return is_sat == unsat
-
-
-
 
     """
     Checkpoint current state
     """
 
     def checkpoint(self):
-        dynamodb = boto3.resource('dynamo')
+        dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('ic3state')
         for i in range(self.states):
             state = self.states[i]
@@ -301,7 +298,7 @@ class BoundedIC3:
     """
 
     def restore(self):
-        dynamodb = boto3.resource('dynamo')
+        dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('ic3state')
         previous_bound = self.bound - BOUND
 
@@ -324,7 +321,7 @@ class BoundedIC3:
             self.states[frame].add(lemma)
 
     def pull_lemmas(self):
-        dynamodb = boto3.resource('dynamo')
+        dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('ic3lemmadb')
         exec self.var_str
 
@@ -332,7 +329,7 @@ class BoundedIC3:
         response = table.scan(
             FilterExpression=Attr('task_id').ne(self.task_id) & Key('timestamp').gt(self.last_pull)
         )
-        self.last_pull = time.time()
+        self.last_pull = int(time.time() * 1000)
         # since all lemmas are inductive, add to all frames
         for i in response['Items']:
             lemma = eval(i['lemma'])
@@ -343,7 +340,7 @@ class BoundedIC3:
 
 
     def push_lemmas(self, lemma):
-        dynamodb = boto3.resource('dynamo')
+        dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('ic3lemmadb')
         timestamp = int(round(time.time() * 1000))
         id = '{0}.{1}'.format(self.task_id, timestamp)
@@ -421,7 +418,7 @@ def handler(event, context):
     trans_str = re.sub(r'(.*)AtMost\(\((.*)\), ([0-9])\)', r'\1AtMost(\2, \3)', trans_str)
     trans = eval(trans_str)
 
-    mp = BoundedIC3(init, trans, goal, xs, inputs, xns, resub_times, back_bit, task_id, var_str, task_id)
+    mp = BoundedIC3(init, trans, goal, xs, inputs, xns, resub_times, back_bit, var_str, task_id)
     result = mp.run()
 
     if isinstance(result, Goal):

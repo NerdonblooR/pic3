@@ -292,7 +292,6 @@ def enumerate_all_assignment(num_var):
 Another way to partition the bad states
 '''
 
-
 def partition_bad_state_shared_variable(init, goal, partition_exp):
     init_str = str(init)
     goal_str = str(goal)
