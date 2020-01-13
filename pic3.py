@@ -294,9 +294,14 @@ Another way to partition the bad states
 
 
 def partition_bad_state_shared_variable(init, goal, partition_exp):
-    shared_vars = retrieve_shared_variables(init, goal)
-    if len(shared_vars) < partition_exp:
-        shared_vars = random.choice(shared_vars)
+    init_str = str(init)
+    goal_str = str(goal)
+    shared_vars = retrieve_shared_variables(init_str, goal_str)
+
+    if len(shared_vars) > partition_exp:
+        shared_vars = random.sample(shared_vars, partition_exp)
+
+    print shared_vars
 
     var_num = len(shared_vars)
     all_assign = enumerate_all_assignment(var_num)
@@ -310,7 +315,7 @@ def partition_bad_state_shared_variable(init, goal, partition_exp):
                 sub_goal_list.append(var)
             else:
                 sub_goal_list.append(Not(var))
-        subgoals.append(str(And(sub_goal_list)))
+        subgoals.append(str(And(goal, And(sub_goal_list))))
 
     return subgoals
 
@@ -373,10 +378,10 @@ def test(file):
     trans_str = str(h2t.trans)
     model = [init_str, trans_str]
 
-    partition_exp = 10
+    partition_exp = 2
     sub_goals = partition_bad_state_shared_variable(h2t.init, h2t.goal, partition_exp)
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(sub_goals) * 2) as executor:
-        print "Initializing {0} workers: ".format(len(sub_goals))
+        print "Initializing {0} workers: ".format(len(sub_goals) * 2)
         term = True
         ret = 'SAT'
         inv_reached = set()
@@ -413,7 +418,7 @@ def test(file):
                 try:
                     response = future.result()
                 except Exception as exc:
-                    print('%r generated an exception: %s' % ("future", exc))
+                    print('%r generated an exception: %s' % ("future[{0}]".format(sub_goal), exc))
                 else:
                     if response == 'nondet':
                         # bound reached resubmit another job
@@ -452,5 +457,5 @@ if __name__ == '__main__':
     # print test("data/horn4.smt2")
     # test("data/horn1.smt2")
     # test("data/horn2.smt2")
-    # test("data/horn3.smt2")
-    print enumerate_all_assignment(3)
+    test("data/horn4.smt2")
+    #print enumerate_all_assignment(3)
