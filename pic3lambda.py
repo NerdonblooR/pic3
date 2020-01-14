@@ -5,7 +5,7 @@ import boto3
 from boto3.dynamodb.conditions import Key, Attr
 import time
 
-BOUND = 10
+BOUND = 1
 
 
 # Produce a finite domain solver.
@@ -19,7 +19,6 @@ def fd_solver():
     s = SolverFor("QF_FD")
     s.set("sat.cardinality.solver", True)
     return s
-
 
 # negate, avoid double negation
 def negate(f):
@@ -277,7 +276,7 @@ class BoundedIC3:
     def checkpoint(self):
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('ic3state')
-        for i in range(self.states):
+        for i in range(len(self.states)):
             state = self.states[i]
             lemma_count = 0
             for lemma in state.R:
@@ -298,6 +297,7 @@ class BoundedIC3:
     """
 
     def restore(self):
+        print "restoring"
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('ic3state')
         previous_bound = self.bound - BOUND
@@ -360,7 +360,7 @@ class BoundedIC3:
 
         if not check_disjoint(self.init, self.bad):
             return "goal is reached in initial state"
-        level = 0
+        level = self.resub * BOUND
         while True:
             # pull lemmas
             self.pull_lemmas()
@@ -385,6 +385,8 @@ class BoundedIC3:
                     return cex
             else:
                 return is_sat
+
+
 
 
 def handler(event, context):
@@ -431,5 +433,5 @@ def handler(event, context):
     if isinstance(result, ExprRef):
         print("Invariant:\n%s " % result)
         return {'message': str(result)}
-
+    #nondet
     return {'message': result}

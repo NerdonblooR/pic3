@@ -5,7 +5,7 @@ import boto3
 from boto3.dynamodb.conditions import Key, Attr
 import time
 
-BOUND = 10
+BOUND = 1
 
 
 class Horn2Transitions:
@@ -387,7 +387,7 @@ class BoundedIC3:
     def checkpoint(self):
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('ic3state')
-        for i in range(self.states):
+        for i in range(len(self.states)):
             state = self.states[i]
             lemma_count = 0
             for lemma in state.R:
@@ -408,6 +408,7 @@ class BoundedIC3:
     """
 
     def restore(self):
+        print "restoring"
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('ic3state')
         previous_bound = self.bound - BOUND
@@ -470,7 +471,7 @@ class BoundedIC3:
 
         if not check_disjoint(self.init, self.bad):
             return "goal is reached in initial state"
-        level = 0
+        level = self.resub * BOUND
         while True:
             # pull lemmas
             self.pull_lemmas()
@@ -504,8 +505,6 @@ input_list = map(lambda x: str(x), h2t.inputs)
 xs_list = map(lambda x: str(x), h2t.xs)
 xns_list = map(lambda x: str(x), h2t.xns)
 
-
-
 init_str = str(h2t.init)
 trans_str = str(h2t.trans)
 goal_str = str(h2t.goal)
@@ -536,19 +535,27 @@ trans_str = trans_str.replace("\n", "")
 trans_str = re.sub(r'(.*)AtMost\(\((.*)\), ([0-9])\)', r'\1AtMost(\2, \3)', trans_str)
 trans = eval(trans_str)
 
+term = False
+while not term:
+    mp = BoundedIC3(init, trans, goal, xs, inputs, xns, resub_times, back_bit, var_str, task_id)
+    result = mp.run()
+    if str(result) == "nondet":
+        resub_times += 1
+    else:
+        if isinstance(result, Goal):
+            g = result
+            print("Trace")
+            while g:
+                print(g.level, g.cube)
+                g = g.parent
+            print {'message': 'cex'}
 
-mp = BoundedIC3(init, trans, goal, xs, inputs, xns, resub_times, back_bit, var_str, task_id)
-result = mp.run()
+        if isinstance(result, ExprRef):
+            print("Invariant:\n%s " % result)
+            print {'message': str(result)}
+            term = True
 
-if isinstance(result, Goal):
-    g = result
-    print("Trace")
-    while g:
-        print(g.level, g.cube)
-        g = g.parent
-    print {'message': 'cex'}
-if isinstance(result, ExprRef):
-    print("Invariant:\n%s " % result)
-    print {'message': str(result)}
+        term = True
+        print {'message': result}
 
-print {'message': result}
+

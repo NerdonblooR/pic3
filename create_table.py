@@ -1,6 +1,17 @@
 import boto3
+import time
 
 dynamodb = boto3.resource('dynamodb')
+
+
+try:
+    state = dynamodb.Table('ic3state')
+    lemma = dynamodb.Table('ic3lemmadb')
+    state.delete()
+    lemma.delete()
+    time.sleep(5)
+except Exception as exc:
+    print exc
 
 table = dynamodb.create_table(
     TableName='ic3state',
