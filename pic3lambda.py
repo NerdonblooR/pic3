@@ -4,8 +4,7 @@ import re
 import boto3
 from boto3.dynamodb.conditions import Key, Attr
 import time
-
-BOUND = 1
+import traceback
 
 
 # Produce a finite domain solver.
@@ -19,6 +18,7 @@ def fd_solver():
     s = SolverFor("QF_FD")
     s.set("sat.cardinality.solver", True)
     return s
+
 
 # negate, avoid double negation
 def negate(f):
@@ -78,7 +78,7 @@ def prune(R):
 
 
 class BoundedIC3:
-    def __init__(self, init, trans, goal, x0, inputs, xn, re_sub_times, backward, var_str, task_id):
+    def __init__(self, init, trans, goal, x0, inputs, xn, re_sub_times, backward, var_str, task_id, bound):
         self.x0 = x0
         self.inputs = inputs
         self.xn = xn
@@ -100,10 +100,12 @@ class BoundedIC3:
         # the bound on the number of frames:
         self.task_id = task_id
         self.resub = re_sub_times
-        self.bound = BOUND * (re_sub_times + 1)
+        self.bu = bound
+        self.maxlevel = bound * (re_sub_times + 1)
         self.backward = backward
         self.var_str = var_str
         self.last_pull = 0
+        self.debuginfo = [None, None]
 
     def next(self, f):
         if is_seq(f):
@@ -218,10 +220,10 @@ class BoundedIC3:
             cube, f, is_sat = self.is_inductive(f, g.cube)
             if is_sat == unsat:
                 self.block_cube(f, self.prev(cube))
-                #Add by Hao:
+                # Add by Hao:
                 if self.is_true_inductive(cube):
-                    #Hao: this is an inductive lemma, share it
-                    self.push_lemmas(cube2clause(cube))
+                    # Hao: this is an inductive lemma, share it
+                    self.push_lemma(cube2clause(cube))
                 if f < f0:
                     self.push_heap(Goal(g.cube, g.parent, f + 1))
             elif is_sat == sat:
@@ -300,7 +302,7 @@ class BoundedIC3:
         print "restoring"
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('ic3state')
-        previous_bound = self.bound - BOUND
+        previous_bound = self.maxlevel - self.bu
 
         # construct frames:
         for i in range(previous_bound):
@@ -318,6 +320,10 @@ class BoundedIC3:
             frame_lemma = lemma_id.split(':')
             frame = int(frame_lemma[0])
             lemma = eval(i['lemma'])
+
+            self.debuginfo[0] = lemma_id
+            self.debuginfo[1] = i['lemma']
+
             self.states[frame].add(lemma)
 
     def pull_lemmas(self):
@@ -327,7 +333,7 @@ class BoundedIC3:
 
         # pull all lemma shared since last pull
         response = table.scan(
-            FilterExpression=Attr('task_id').ne(self.task_id) & Key('timestamp').gt(self.last_pull)
+            FilterExpression=Attr('task_id').ne(self.task_id) & Key('time_stamp').gt(self.last_pull)
         )
         self.last_pull = int(time.time() * 1000)
         # since all lemmas are inductive, add to all frames
@@ -337,16 +343,14 @@ class BoundedIC3:
             for state in self.states:
                 state.add(lemma)
 
-
-
-    def push_lemmas(self, lemma):
+    def push_lemma(self, lemma):
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('ic3lemmadb')
         timestamp = int(round(time.time() * 1000))
         id = '{0}.{1}'.format(self.task_id, timestamp)
         response = table.put_item(
             Item={
-                'lemma_id':  id,
+                'lemma_id': id,
                 'time_stamp': timestamp,
                 'task_id': self.task_id,
                 'lemma': str(lemma)
@@ -356,17 +360,24 @@ class BoundedIC3:
 
     def run(self):
         if self.resub:
-            self.restore()
+            try:
+                self.restore()
+            except Exception as exp:
+                snapshot = "tid {4} resub {0}, maxlevel {1}, frame {2}, lemma {3}".format(self.resub, self.maxlevel,
+                                                                                          self.debuginfo[0],
+                                                                                          self.debuginfo[1],
+                                                                                          self.task_id)
+                return str(traceback.format_exc()) + snapshot
 
         if not check_disjoint(self.init, self.bad):
             return "goal is reached in initial state"
-        level = self.resub * BOUND
+        level = self.resub * self.bu
         while True:
             # pull lemmas
             self.pull_lemmas()
 
             # bound reached
-            if level > self.bound:
+            if level > self.maxlevel:
                 self.checkpoint()
                 return "nondet"
 
@@ -387,8 +398,6 @@ class BoundedIC3:
                 return is_sat
 
 
-
-
 def handler(event, context):
     init_str = str(event['init'])
     trans_str = str(event['trans'])
@@ -399,6 +408,7 @@ def handler(event, context):
     back_bit = int(event['backward'])
     resub_times = int(event['r'])
     task_id = int(event['id'])
+    bound = int(event['bound'])
 
     variables = "{0} {1} {2}".format(xs_str, inputs_str, xns_str)
     print variables
@@ -420,7 +430,7 @@ def handler(event, context):
     trans_str = re.sub(r'(.*)AtMost\(\((.*)\), ([0-9])\)', r'\1AtMost(\2, \3)', trans_str)
     trans = eval(trans_str)
 
-    mp = BoundedIC3(init, trans, goal, xs, inputs, xns, resub_times, back_bit, var_str, task_id)
+    mp = BoundedIC3(init, trans, goal, xs, inputs, xns, resub_times, back_bit, var_str, task_id, bound)
     result = mp.run()
 
     if isinstance(result, Goal):
@@ -433,5 +443,5 @@ def handler(event, context):
     if isinstance(result, ExprRef):
         print("Invariant:\n%s " % result)
         return {'message': str(result)}
-    #nondet
+    # nondet
     return {'message': result}

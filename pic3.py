@@ -9,7 +9,6 @@ import time
 import random
 import re
 
-
 # Simplistic (and fragile) converter from
 # a class of Horn clauses corresponding to
 # a transition system into a transition system
@@ -20,6 +19,8 @@ import re
 #  Invariant(x) and trans(x,x') => Invariant(x')
 #  Invariant(x) and goal(x) => Goal(x)
 # where Invariant and Goal are uninterpreted predicates
+BOUND = 1
+
 
 class Horn2Transitions:
     def __init__(self):
@@ -292,6 +293,7 @@ def enumerate_all_assignment(num_var):
 Another way to partition the bad states
 '''
 
+
 def partition_bad_state_shared_variable(init, goal, partition_exp):
     init_str = str(init)
     goal_str = str(goal)
@@ -322,12 +324,15 @@ def partition_bad_state_shared_variable(init, goal, partition_exp):
 """
 invoke a lambda funciton
 """
+
+
 # test lambda expression
-def invoke_lambda_function(id, model, model_vars, goal, mode, re_sub):
+def invoke_lambda_function(id, model, model_vars, goal, mode, re_sub, bound):
     session = boto3.session.Session()
     client = session.client('lambda')
     event = {'init': str(model[0]), 'trans': str(model[1]), 'goal': str(goal), 'inputs': " ".join(model_vars[0]),
-             'xs': " ".join(model_vars[1]), 'xns': " ".join(model_vars[2]), 'r': 0, 'backward': 0, 'id': id}
+             'xs': " ".join(model_vars[1]), 'xns': " ".join(model_vars[2]), 'r': 0, 'backward': 0, 'id': id,
+             'bound': bound}
 
     # backward_pdr
     if mode == 'b':
@@ -344,7 +349,7 @@ def invoke_lambda_function(id, model, model_vars, goal, mode, re_sub):
 
     # re-submit if bound of an instance is reached
     if re_sub:
-        event['r'] = 1
+        event['r'] = re_sub
 
     response = client.invoke(
         FunctionName='pic3lambda',
@@ -380,8 +385,8 @@ def test(file):
     partition_exp = 2
     sub_goals = partition_bad_state_shared_variable(h2t.init, h2t.goal, partition_exp)
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(sub_goals) * 2) as executor:
-        print "Initializing {0} workers: ".format(len(sub_goals) * 2)
-        term = True
+        term = False
+        use_backward = False
         ret = 'SAT'
         inv_reached = set()
 
@@ -394,21 +399,26 @@ def test(file):
         count = 0
 
         for sub_goal in sub_goals:
-            f_forward = executor.submit(invoke_lambda_function, count, model[:], model_vars[:], sub_goal, "", 0)
+            f_forward = executor.submit(invoke_lambda_function, count, model[:], model_vars[:], sub_goal, "", 0, BOUND)
             lambda_id[f_forward] = count
             count += 1
-            f_backward = executor.submit(invoke_lambda_function, count, model[:], model_vars[:], sub_goal, "b", 0)
-            lambda_id[f_backward] = count
-            count += 1
-
             lambda_futures[f_forward] = sub_goal
-            lambda_futures[f_backward] = sub_goal
             lambda_modes[f_forward] = ""
-            lambda_modes[f_backward] = "b"
             lambda_resub_times[f_forward] = 0
-            lambda_resub_times[f_backward] = 0
 
-        while term:
+        if use_backward:
+            for sub_goal in sub_goals:
+                f_backward = executor.submit(invoke_lambda_function, count, model[:], model_vars[:], sub_goal, "b", 0,
+                                             BOUND)
+                lambda_id[f_backward] = count
+                count += 1
+                lambda_futures[f_backward] = sub_goal
+                lambda_modes[f_backward] = "b"
+                lambda_resub_times[f_backward] = 0
+
+        print "Initializing {0} workers: ".format(count)
+
+        while not term:
             completed_future = retrieve_completed_task(lambda_futures)
             print "Waiting for workers to complete..."
             for future in completed_future:
@@ -420,17 +430,20 @@ def test(file):
                     print('%r generated an exception: %s' % ("future[{0}]".format(sub_goal), exc))
                 else:
                     if response == 'nondet':
+
                         # bound reached resubmit another job
                         mode = lambda_modes[future]
                         resub_times = lambda_resub_times[future] + 1
                         task_id = lambda_id[future]
+
+                        print "resub task: {0}, times {1}".format(task_id, resub_times)
 
                         del lambda_modes[future]
                         del lambda_resub_times[future]
                         del lambda_id[future]
 
                         f = executor.submit(invoke_lambda_function, task_id, model[:], model_vars[:], sub_goal, mode,
-                                            resub_times)
+                                            resub_times, BOUND)
 
                         lambda_futures[f] = sub_goal
                         lambda_modes[f] = mode
@@ -438,14 +451,15 @@ def test(file):
                         lambda_id[f] = task_id
 
                     elif response == 'cex':
-                        term = False
+                        term = True
                         break
                     else:  # reach an inv
                         print "Worker [sub-goal: {0}] completes\n Invariant:\n {1}".format(sub_goal, response)
                         inv_reached.add(sub_goal)
                         # print subgoal
+                        print "{0} inv_reached".format(len(inv_reached))
                         if len(sub_goals) == len(inv_reached):
-                            term = False
+                            term = True
                             ret = 'UNSAT'
                             break
             time.sleep(1)
@@ -457,4 +471,4 @@ if __name__ == '__main__':
     # test("data/horn1.smt2")
     # test("data/horn2.smt2")
     test("data/horn4.smt2")
-    #print enumerate_all_assignment(3)
+    # print enumerate_all_assignment(3)

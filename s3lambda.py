@@ -5,7 +5,7 @@ import boto3
 from boto3.dynamodb.conditions import Key, Attr
 import time
 
-BOUND = 1
+BOUND = 10
 
 
 class Horn2Transitions:
@@ -329,10 +329,10 @@ class BoundedIC3:
             cube, f, is_sat = self.is_inductive(f, g.cube)
             if is_sat == unsat:
                 self.block_cube(f, self.prev(cube))
-                #Add by Hao:
+                # Add by Hao:
                 if self.is_true_inductive(cube):
-                    #Hao: this is an inductive lemma, share it
-                    self.push_lemmas(cube2clause(cube))
+                    # Hao: this is an inductive lemma, share it
+                    self.push_lemma(cube2clause(cube))
                 if f < f0:
                     self.push_heap(Goal(g.cube, g.parent, f + 1))
             elif is_sat == sat:
@@ -401,7 +401,7 @@ class BoundedIC3:
                         'lemma': str(lemma)
                     }
                 )
-                print response
+                # print response
 
     """
     Restore from checkpoint
@@ -438,32 +438,32 @@ class BoundedIC3:
 
         # pull all lemma shared since last pull
         response = table.scan(
-            FilterExpression=Attr('task_id').ne(self.task_id) & Key('timestamp').gt(self.last_pull)
+            FilterExpression=Attr('task_id').ne(self.task_id) & Key('time_stamp').gt(self.last_pull)
         )
+
         self.last_pull = int(time.time() * 1000)
         # since all lemmas are inductive, add to all frames
         for i in response['Items']:
             lemma = eval(i['lemma'])
+            print lemma
             # add to all frame:
             for state in self.states:
                 state.add(lemma)
 
-
-
-    def push_lemmas(self, lemma):
+    def push_lemma(self, lemma):
         dynamodb = boto3.resource('dynamodb')
         table = dynamodb.Table('ic3lemmadb')
         timestamp = int(round(time.time() * 1000))
         id = '{0}.{1}'.format(self.task_id, timestamp)
         response = table.put_item(
             Item={
-                'lemma_id':  id,
+                'lemma_id': id,
                 'time_stamp': timestamp,
                 'task_id': self.task_id,
                 'lemma': str(lemma)
             }
         )
-        print response
+        # print response
 
     def run(self):
         if self.resub:
@@ -557,5 +557,3 @@ while not term:
 
         term = True
         print {'message': result}
-
-
