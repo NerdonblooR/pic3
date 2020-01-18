@@ -339,12 +339,13 @@ def invoke_lambda_function(id, model, model_vars, goal, mode, re_sub, bound):
         # generate reverse pdr by:
         # 1. xs in init and goal to xn
         # 2. flip goal and inputs
+        # 3. flip xn and x
         event['init'] = str(goal).replace('x', 'xn')
         event['trans'] = str(model[1])
         event['goal'] = str(model[0]).replace('x', 'xn')
         event['inputs'] = " ".join(model_vars[0])
-        event['xs'] = " ".join(model_vars[1])
-        event['xns'] = " ".join(model_vars[2])
+        event['xs'] = " ".join(model_vars[2])
+        event['xns'] = " ".join(model_vars[1])
         event['backward'] = 1
 
     # re-submit if bound of an instance is reached
@@ -386,7 +387,7 @@ def test(file):
     sub_goals = partition_bad_state_shared_variable(h2t.init, h2t.goal, partition_exp)
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(sub_goals) * 2) as executor:
         term = False
-        use_backward = False
+        use_backward = True
         ret = 'SAT'
         inv_reached = set()
 
@@ -430,7 +431,6 @@ def test(file):
                     print('%r generated an exception: %s' % ("future[{0}]".format(sub_goal), exc))
                 else:
                     if response == 'nondet':
-
                         # bound reached resubmit another job
                         mode = lambda_modes[future]
                         resub_times = lambda_resub_times[future] + 1

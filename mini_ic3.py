@@ -367,11 +367,21 @@ class MiniIC3:
             cube, f = self.generalize(cube, f)
         return cube, f, is_sat
 
+
+    def checkpoint(self):
+        for i in range(len(self.states)):
+            state = self.states[i]
+            for lemma in state.R:
+                print str(lemma)
+
+
+
     def run(self):
         if not check_disjoint(self.init, self.bad):
             return "goal is reached in initial state"
         level = 0
         while True:
+            self.checkpoint()
             inv = self.is_valid()
             if inv is not None:
                 return inv
@@ -532,7 +542,13 @@ xns_str = " ".join(xns_list)
 variables = "{0} {1} {2}".format(xs_str, inputs_str, xns_str)
 v_list = variables.split()
 var_str = "{0} = Bools('{1}')".format(",".join(v_list), " ".join(v_list))
-print var_str
+
+#
+init_str = init_str.replace('x','xn')
+goal_str = goal_str.replace('x','xn')
+
+print init_str
+print goal_str
 
 exec var_str
 
@@ -543,43 +559,19 @@ xns = Bools(xns_str)
 init = eval(init_str)
 goal = eval(goal_str)
 
-print trans_str
+
 trans_str = trans_str.replace("\n", "")
 trans_str = re.sub(r'(.*)AtMost\(\((.*)\), ([0-9])\)', r'\1AtMost(\2, \3)', trans_str)
+#trans_str = trans_str.replace('x','xn')
+print trans_str
 trans = eval(trans_str)
-
-
-def partition_bad_state_demo(goal):
-    subgoals = []
-    for i in [0,1]:
-        for j in [0,1]:
-            x1 = Bool('x1')
-            x2 = Bool('x2')
-            if not i:
-                x1 = Not(x1)
-            if not j:
-                x2 = Not(x2)
-            subgoals.append(str(And(goal,x1,x2)))
-    return  subgoals
-
-
-print "======================================"
-ps = partition_bad_state_demo(h2t.goal)
-print ps
-for subgoal in ps:
-    print subgoal
-
-# init_str = init_str.replace('x','xn')
-# goal_str = 'Or(And(x1, x4, Not(x7), Not(i4), Not(i3), i2, Not(i1)))'
-# goal_str = goal_str.replace('x','xn')
 # print goal_str
 # init = eval(init_str)
 #goal = eval(ps[3])
 #
-# mp = MiniIC3(goal, trans, init, xns, inputs, xs)
-#
-mp = MiniIC3(init, trans, goal, xs, inputs, xns)
-# #
+mp = MiniIC3(goal, trans, init, xns, inputs, xs)#
+#mp = MiniIC3(init, trans, goal, xs, inputs, xns)
+
 start = datetime.datetime.now()
 result = mp.run()
 print result
@@ -594,24 +586,6 @@ if isinstance(result, ExprRef):
 end = datetime.datetime.now()
 diff = end - start
 print float(diff.microseconds) / float(1000)
-# response = invoke_lambda_function(h2t, str(goal))
-# print response
-# print init_str
-# print goal_str
-
-    # response = invoke_lambda_function(h2t, subgoal)
-    # print response
-    # goal = eval(subgoal)
-    # mp = MiniIC3(init, trans, goal, xs, inputs, xns)
-    # result = mp.run()
-    # if isinstance(result, Goal):
-    #     g = result
-    #     print("Trace")
-    #     while g:
-    #         print(g.level, g.cube)
-    #         g = g.parent
-    # if isinstance(result, ExprRef):
-    #     print("Invariant:\n%s " % result)
 
 
 # print "========================="
@@ -626,3 +600,4 @@ print float(diff.microseconds) / float(1000)
 # print h2t.xs
 # print "========================="
 # print h2t.xns
+

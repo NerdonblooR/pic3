@@ -292,7 +292,7 @@ class BoundedIC3:
                         'lemma': str(lemma)
                     }
                 )
-                print response
+                # print response
 
     """
     Restore from checkpoint
@@ -320,11 +320,10 @@ class BoundedIC3:
             frame_lemma = lemma_id.split(':')
             frame = int(frame_lemma[0])
             lemma = eval(i['lemma'])
-
-            self.debuginfo[0] = lemma_id
-            self.debuginfo[1] = i['lemma']
-
-            self.states[frame].add(lemma)
+            if not callable(lemma):
+                self.debuginfo[0] = lemma_id
+                self.debuginfo[1] = i['lemma']
+                self.states[frame].add(lemma)
 
     def pull_lemmas(self):
         dynamodb = boto3.resource('dynamodb')
@@ -333,15 +332,17 @@ class BoundedIC3:
 
         # pull all lemma shared since last pull
         response = table.scan(
-            FilterExpression=Attr('task_id').ne(self.task_id) & Key('time_stamp').gt(self.last_pull)
+            FilterExpression=Attr('task_id').ne(self.task_id) & Key('time_stamp').gt(self.last_pull) & Attr(
+                'task_id').eq(self.backward)
         )
         self.last_pull = int(time.time() * 1000)
         # since all lemmas are inductive, add to all frames
         for i in response['Items']:
             lemma = eval(i['lemma'])
-            # add to all frame:
-            for state in self.states:
-                state.add(lemma)
+            if not callable(lemma):
+                # add to all frame:
+                for state in self.states:
+                    state.add(lemma)
 
     def push_lemma(self, lemma):
         dynamodb = boto3.resource('dynamodb')
@@ -353,7 +354,8 @@ class BoundedIC3:
                 'lemma_id': id,
                 'time_stamp': timestamp,
                 'task_id': self.task_id,
-                'lemma': str(lemma)
+                'lemma': str(lemma),
+                'mode': self.backward
             }
         )
         print response
@@ -373,13 +375,12 @@ class BoundedIC3:
             return "goal is reached in initial state"
         level = self.resub * self.bu
         while True:
-            # pull lemmas
-            self.pull_lemmas()
-
-            # bound reached
             if level > self.maxlevel:
                 self.checkpoint()
                 return "nondet"
+
+            # pull lemmas
+            self.pull_lemmas()
 
             inv = self.is_valid()
             if inv is not None:
@@ -387,6 +388,7 @@ class BoundedIC3:
             is_sat, cube = self.unfold()
             if is_sat == unsat:
                 level += 1
+                # bound reached
                 print("Unfold %d" % level)
                 sys.stdout.flush()
                 self.add_solver()

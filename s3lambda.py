@@ -438,17 +438,17 @@ class BoundedIC3:
 
         # pull all lemma shared since last pull
         response = table.scan(
-            FilterExpression=Attr('task_id').ne(self.task_id) & Key('time_stamp').gt(self.last_pull)
+            FilterExpression=Attr('task_id').ne(self.task_id) & Key('time_stamp').gt(self.last_pull) & Attr(
+                'task_id').eq(self.backward)
         )
-
         self.last_pull = int(time.time() * 1000)
         # since all lemmas are inductive, add to all frames
         for i in response['Items']:
             lemma = eval(i['lemma'])
-            print lemma
-            # add to all frame:
-            for state in self.states:
-                state.add(lemma)
+            if not callable(lemma):
+                # add to all frame:
+                for state in self.states:
+                    state.add(lemma)
 
     def push_lemma(self, lemma):
         dynamodb = boto3.resource('dynamodb')
@@ -460,10 +460,11 @@ class BoundedIC3:
                 'lemma_id': id,
                 'time_stamp': timestamp,
                 'task_id': self.task_id,
-                'lemma': str(lemma)
+                'lemma': str(lemma),
+                'mode': self.backward
             }
         )
-        # print response
+        print response
 
     def run(self):
         if self.resub:
